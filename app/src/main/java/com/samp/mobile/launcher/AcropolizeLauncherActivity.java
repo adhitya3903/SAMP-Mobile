@@ -32,36 +32,41 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
 
 /**
- * Launcher Acropolize di dalam aplikasi: pilih/tambah server, nama, versi SA-MP,
- * lalu menulis settings.ini otomatis dan menjalankan game.
- * Tidak memakai server luar (tidak butuh internet untuk membuka launcher ini).
+ * Launcher Acropolize di dalam aplikasi. Tampilannya mengikuti launcher PC:
+ * header, panel kiri bergradasi emas, "Selamat Datang", tombol MAIN kuning.
+ * Menulis settings.ini otomatis lalu menjalankan game. Tidak butuh server luar.
  */
 public class AcropolizeLauncherActivity extends Activity {
 
     // ===================== EDIT DI SINI =====================
-    private static final String APP_TITLE = "ACROPOLIZE ROLEPLAY";
+    private static final String HEADER_TITLE = "ACROPOLIZE ROLEPLAY  \u2022  LAUNCHER";
     private static final String TAGLINE = "Together We Are One";
+    private static final String FOOTER = "\u00A9 2026 Hachiroku  \u2022  Acropolize Roleplay   v2.1.0";
     // Server bawaan {nama, alamat}. Contoh: { {"Acropolize", "123.45.67.89:7777"} }
-    // Biarkan kosong kalau tidak mau ada server bawaan.
     private static final String[][] DEFAULT_SERVERS = { };
     private static final String[] VERSIONS = { "0.3.7", "0.3.7-R5", "0.3.DL-R1" };
     private static final String DEFAULT_VERSION = "0.3.7-R5";
     // ========================================================
 
-    private static final int ACCENT = Color.parseColor("#FFD400");
-    private static final int BG = Color.parseColor("#0F0F12");
-    private static final int PANEL = Color.parseColor("#18181D");
-    private static final int FIELD = Color.parseColor("#21212A");
-    private static final int STROKE = Color.parseColor("#2E2E38");
-    private static final int TEXT = Color.parseColor("#EBEBEE");
-    private static final int MUTED = Color.parseColor("#91919B");
-    private static final int DANGER = Color.parseColor("#FF6347");
-    private static final int OK = Color.parseColor("#33CC55");
+    // Warna sama dengan launcher PC
+    private static final int BG = Color.rgb(15, 15, 18);
+    private static final int PANEL = Color.rgb(24, 24, 29);
+    private static final int FIELD = Color.rgb(33, 33, 39);
+    private static final int ACCENT = Color.rgb(255, 212, 0);
+    private static final int TEXT = Color.rgb(235, 235, 238);
+    private static final int MUTED = Color.rgb(145, 145, 155);
+    private static final int DANGER = Color.rgb(255, 99, 71);
+    private static final int OK = Color.rgb(51, 204, 85);
+    private static final int STROKE = Color.rgb(60, 60, 68);
+    private static final int GOLD_TOP = Color.rgb(44, 37, 0);
 
     private static final Pattern NICK =
             Pattern.compile("^[A-Za-z0-9_\\[\\]\\.\\$=@\\(\\)]{3,24}$");
@@ -102,6 +107,13 @@ public class AcropolizeLauncherActivity extends Activity {
         String host = "";
         int port = 7777;
         String password = "";
+        // status (tidak disimpan)
+        boolean checking = false;
+        boolean checked = false;
+        boolean online = false;
+        int players = -1;
+        int maxPlayers = -1;
+        long ping = -1;
     }
 
     private SharedPreferences prefs;
@@ -113,6 +125,8 @@ public class AcropolizeLauncherActivity extends Activity {
     private LinearLayout serverListBox;
     private LinearLayout versionRow;
     private TextView tvStatus;
+    private TextView tvServerState;
+    private TextView tvPlayers;
 
     // ------------------------------------------------------------------ lifecycle
 
@@ -125,6 +139,8 @@ public class AcropolizeLauncherActivity extends Activity {
         refreshServers();
         refreshVersions();
         refreshStatus();
+        refreshLeftStatus();
+        queryAll();
     }
 
     @Override
@@ -176,10 +192,9 @@ public class AcropolizeLauncherActivity extends Activity {
         return t;
     }
 
-    private TextView sectionLabel(String s) {
-        TextView t = text(s, 11, ACCENT, true);
-        t.setLetterSpacing(0.18f);
-        t.setPadding(dp(2), dp(14), 0, dp(6));
+    private TextView fieldLabel(String s) {
+        TextView t = text(s, 12, TEXT, true);
+        t.setPadding(dp(2), dp(12), 0, dp(5));
         return t;
     }
 
@@ -187,132 +202,165 @@ public class AcropolizeLauncherActivity extends Activity {
         Toast.makeText(this, s, Toast.LENGTH_LONG).show();
     }
 
+    private LinearLayout.LayoutParams lp(int w, int h) {
+        return new LinearLayout.LayoutParams(w, h);
+    }
+
     // ------------------------------------------------------------------ UI
 
     private void buildUi() {
         LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.HORIZONTAL);
+        root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(BG);
-        root.setPadding(dp(24), dp(12), dp(24), dp(12));
 
-        // ---- kiri: logo
+        // ---- header (seperti launcher PC)
+        TextView header = text(HEADER_TITLE, 10, MUTED, true);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setBackgroundColor(PANEL);
+        header.setPadding(dp(16), 0, dp(16), 0);
+        root.addView(header, lp(ViewGroup.LayoutParams.MATCH_PARENT, dp(34)));
+
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.HORIZONTAL);
+        root.addView(body, lp(ViewGroup.LayoutParams.MATCH_PARENT, 0));
+        ((LinearLayout.LayoutParams) body.getLayoutParams()).weight = 1f;
+
+        // ---- panel kiri: logo, status server, tagline (gradasi emas -> gelap)
         LinearLayout left = new LinearLayout(this);
         left.setOrientation(LinearLayout.VERTICAL);
-        left.setGravity(Gravity.CENTER);
+        left.setGravity(Gravity.CENTER_HORIZONTAL);
+        GradientDrawable grad = new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM, new int[] { GOLD_TOP, BG });
+        left.setBackground(grad);
+        left.setPadding(dp(12), dp(14), dp(12), dp(14));
 
         ImageView logo = new ImageView(this);
         logo.setImageResource(R.drawable.acro_logo);
         logo.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        left.addView(logo, new LinearLayout.LayoutParams(dp(150), dp(180)));
+        left.addView(logo, lp(dp(150), dp(170)));
 
-        TextView title = text(APP_TITLE, 15, ACCENT, true);
-        title.setGravity(Gravity.CENTER);
-        title.setLetterSpacing(0.08f);
-        LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        tlp.topMargin = dp(8);
-        left.addView(title, tlp);
+        tvServerState = text("\u25CF Memeriksa server...", 13, MUTED, true);
+        tvServerState.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams sl = lp(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        sl.topMargin = dp(10);
+        left.addView(tvServerState, sl);
 
-        TextView tag = text("\u201C" + TAGLINE + "\u201D", 12, MUTED, false);
+        tvPlayers = text("", 11, MUTED, false);
+        tvPlayers.setGravity(Gravity.CENTER);
+        left.addView(tvPlayers, lp(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        View spacer = new View(this);
+        left.addView(spacer, lp(1, 0));
+        ((LinearLayout.LayoutParams) spacer.getLayoutParams()).weight = 1f;
+
+        TextView tag = text("\u201C" + TAGLINE + "\u201D", 12, ACCENT, false);
         tag.setTypeface(Typeface.DEFAULT, Typeface.ITALIC);
         tag.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams glp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        glp.topMargin = dp(4);
-        left.addView(tag, glp);
+        left.addView(tag, lp(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        root.addView(left, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+        body.addView(left, lp(0, ViewGroup.LayoutParams.MATCH_PARENT));
+        ((LinearLayout.LayoutParams) left.getLayoutParams()).weight = 1f;
 
-        // ---- kanan: pengaturan + tombol MAIN
+        // ---- panel kanan
         LinearLayout right = new LinearLayout(this);
         right.setOrientation(LinearLayout.VERTICAL);
-        right.setPadding(dp(16), 0, 0, 0);
+        right.setPadding(dp(24), dp(8), dp(24), dp(6));
 
         ScrollView sv = new ScrollView(this);
-        sv.setFillViewport(false);
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
         sv.addView(content, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        // pemain
-        content.addView(sectionLabel("PEMAIN"));
+        TextView welcome = text("Selamat Datang", 22, ACCENT, true);
+        content.addView(welcome);
+        TextView sub = text("Masuk lewat launcher resmi untuk bermain dengan aman dan adil.", 12, MUTED, false);
+        content.addView(sub);
+
+        content.addView(fieldLabel("Nama karakter"));
         etNick = new EditText(this);
-        etNick.setHint("Nama karakter (contoh: Nama_Karakter)");
+        etNick.setHint("Contoh: Nama_Karakter");
         etNick.setHintTextColor(MUTED);
         etNick.setTextColor(TEXT);
         etNick.setTextSize(15);
         etNick.setSingleLine(true);
         etNick.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
-        etNick.setBackground(box(FIELD, STROKE, 10));
-        etNick.setPadding(dp(14), dp(10), dp(14), dp(10));
+        etNick.setBackground(box(FIELD, STROKE, 6));
+        etNick.setPadding(dp(12), dp(9), dp(12), dp(9));
         etNick.setText(prefs.getString("nick", ""));
-        content.addView(etNick, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        content.addView(etNick, lp(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        // server
-        content.addView(sectionLabel("SERVER"));
+        content.addView(fieldLabel("Server"));
         serverListBox = new LinearLayout(this);
         serverListBox.setOrientation(LinearLayout.VERTICAL);
-        content.addView(serverListBox, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        content.addView(serverListBox, lp(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        TextView add = text("+  Tambah server", 14, ACCENT, true);
+        TextView add = text("+  Tambah server", 13, TEXT, true);
         add.setGravity(Gravity.CENTER);
-        add.setBackground(box(PANEL, ACCENT, 10));
-        add.setPadding(dp(14), dp(10), dp(14), dp(10));
+        add.setBackground(box(PANEL, STROKE, 6));
+        add.setPadding(dp(14), dp(9), dp(14), dp(9));
         add.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 showAddServerDialog();
             }
         });
-        content.addView(add, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        content.addView(add, lp(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        // versi
-        content.addView(sectionLabel("VERSI SA-MP"));
+        content.addView(fieldLabel("Versi SA-MP"));
         versionRow = new LinearLayout(this);
         versionRow.setOrientation(LinearLayout.HORIZONTAL);
-        content.addView(versionRow, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        content.addView(versionRow, lp(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         TextView vhint = text("Kalau server menolak koneksi, coba versi lain.", 11, MUTED, false);
-        vhint.setPadding(dp(2), dp(6), 0, 0);
+        vhint.setPadding(dp(2), dp(5), 0, 0);
         content.addView(vhint);
 
-        // status data game
-        tvStatus = text("", 12, MUTED, false);
-        tvStatus.setPadding(dp(2), dp(14), 0, dp(8));
+        tvStatus = text("", 11, MUTED, false);
+        tvStatus.setPadding(dp(2), dp(12), 0, dp(6));
         content.addView(tvStatus);
 
-        right.addView(sv, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        right.addView(sv, lp(ViewGroup.LayoutParams.MATCH_PARENT, 0));
+        ((LinearLayout.LayoutParams) sv.getLayoutParams()).weight = 1f;
 
-        TextView main = text("MAIN", 18, Color.BLACK, true);
+        TextView main = text("MAIN", 17, Color.BLACK, true);
         main.setGravity(Gravity.CENTER);
-        main.setLetterSpacing(0.15f);
-        main.setBackground(box(ACCENT, 0, 12));
-        main.setPadding(dp(14), dp(12), dp(14), dp(12));
+        main.setBackground(box(ACCENT, 0, 4));
+        main.setPadding(dp(14), dp(11), dp(14), dp(11));
         main.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 onMainClicked();
             }
         });
-        LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        mlp.topMargin = dp(8);
+        LinearLayout.LayoutParams mlp = lp(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        mlp.topMargin = dp(6);
         right.addView(main, mlp);
 
-        root.addView(right, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1.7f));
+        TextView footer = text(FOOTER, 9, MUTED, false);
+        footer.setGravity(Gravity.END);
+        footer.setPadding(0, dp(6), 0, 0);
+        right.addView(footer, lp(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        body.addView(right, lp(0, ViewGroup.LayoutParams.MATCH_PARENT));
+        ((LinearLayout.LayoutParams) right.getLayoutParams()).weight = 1.7f;
+
         setContentView(root);
+    }
+
+    private String serverLine(Server s) {
+        if (s.checking && !s.checked) return "Memeriksa...";
+        if (!s.checked) return "";
+        if (s.online) {
+            return s.players + " / " + s.maxPlayers + " pemain  \u2022  " + s.ping + " ms";
+        }
+        return "Tidak merespons (query)";
     }
 
     private void refreshServers() {
         serverListBox.removeAllViews();
         if (servers.isEmpty()) {
-            TextView empty = text("Belum ada server. Tambahkan alamat server kamu.", 13, MUTED, false);
-            empty.setPadding(dp(2), dp(2), 0, dp(10));
+            TextView empty = text("Belum ada server. Tambahkan alamat server kamu.", 12, MUTED, false);
+            empty.setPadding(dp(2), dp(2), 0, dp(8));
             serverListBox.addView(empty);
             return;
         }
@@ -324,16 +372,23 @@ public class AcropolizeLauncherActivity extends Activity {
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setPadding(dp(14), dp(10), dp(10), dp(10));
-            row.setBackground(box(sel ? Color.parseColor("#2B2810") : FIELD, sel ? ACCENT : STROKE, 10));
+            row.setPadding(dp(12), dp(8), dp(8), dp(8));
+            row.setBackground(box(sel ? Color.rgb(43, 40, 16) : FIELD, sel ? ACCENT : STROKE, 6));
 
             LinearLayout info = new LinearLayout(this);
             info.setOrientation(LinearLayout.VERTICAL);
-            info.addView(text(s.name, 15, TEXT, true));
-            info.addView(text(s.host + ":" + s.port, 12, MUTED, false));
-            row.addView(info, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            String addr = s.host + ":" + s.port;
+            info.addView(text(s.name.equals(addr) ? addr : s.name, 14, TEXT, true));
+            if (!s.name.equals(addr)) info.addView(text(addr, 11, MUTED, false));
+            String st = serverLine(s);
+            if (st.length() > 0) {
+                int c = !s.checked ? MUTED : (s.online ? OK : DANGER);
+                info.addView(text(st, 11, c, false));
+            }
+            row.addView(info, lp(0, ViewGroup.LayoutParams.WRAP_CONTENT));
+            ((LinearLayout.LayoutParams) info.getLayoutParams()).weight = 1f;
 
-            TextView del = text("Hapus", 12, DANGER, true);
+            TextView del = text("Hapus", 11, DANGER, true);
             del.setPadding(dp(10), dp(6), dp(6), dp(6));
             del.setOnClickListener(new View.OnClickListener() {
                 @Override
@@ -349,13 +404,37 @@ public class AcropolizeLauncherActivity extends Activity {
                     selected = idx;
                     saveState();
                     refreshServers();
+                    refreshLeftStatus();
                 }
             });
 
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            lp.bottomMargin = dp(8);
-            serverListBox.addView(row, lp);
+            LinearLayout.LayoutParams l = lp(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            l.bottomMargin = dp(6);
+            serverListBox.addView(row, l);
+        }
+    }
+
+    private void refreshLeftStatus() {
+        if (tvServerState == null) return;
+        if (selected < 0 || selected >= servers.size()) {
+            tvServerState.setTextColor(MUTED);
+            tvServerState.setText("\u25CF Belum ada server");
+            tvPlayers.setText("");
+            return;
+        }
+        Server s = servers.get(selected);
+        if (!s.checked) {
+            tvServerState.setTextColor(MUTED);
+            tvServerState.setText("\u25CF Memeriksa server...");
+            tvPlayers.setText("");
+        } else if (s.online) {
+            tvServerState.setTextColor(OK);
+            tvServerState.setText("\u25CF Server Online");
+            tvPlayers.setText(s.players + " / " + s.maxPlayers + " pemain");
+        } else {
+            tvServerState.setTextColor(DANGER);
+            tvServerState.setText("\u25CF Server Offline");
+            tvPlayers.setText("");
         }
     }
 
@@ -364,10 +443,10 @@ public class AcropolizeLauncherActivity extends Activity {
         for (int i = 0; i < VERSIONS.length; i++) {
             final String v = VERSIONS[i];
             boolean sel = v.equals(version);
-            TextView chip = text(v, 13, sel ? Color.BLACK : TEXT, true);
+            TextView chip = text(v, 12, sel ? Color.BLACK : TEXT, true);
             chip.setGravity(Gravity.CENTER);
-            chip.setBackground(box(sel ? ACCENT : FIELD, sel ? 0 : STROKE, 20));
-            chip.setPadding(dp(14), dp(8), dp(14), dp(8));
+            chip.setBackground(box(sel ? ACCENT : FIELD, sel ? 0 : STROKE, 16));
+            chip.setPadding(dp(12), dp(7), dp(12), dp(7));
             chip.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View view) {
@@ -376,10 +455,9 @@ public class AcropolizeLauncherActivity extends Activity {
                     refreshVersions();
                 }
             });
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            lp.rightMargin = dp(8);
-            versionRow.addView(chip, lp);
+            LinearLayout.LayoutParams l = lp(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            l.rightMargin = dp(8);
+            versionRow.addView(chip, l);
         }
     }
 
@@ -395,6 +473,77 @@ public class AcropolizeLauncherActivity extends Activity {
                     + (root != null ? root.getAbsolutePath() : "(penyimpanan tidak tersedia)")
                     + "\nSalin isi folder Files (data, models, Textures, SAMP, dst) ke folder itu.");
         }
+    }
+
+    // ------------------------------------------------------------------ cek status server (query UDP SA-MP)
+
+    private void queryAll() {
+        for (int i = 0; i < servers.size(); i++) queryServer(servers.get(i));
+    }
+
+    private void queryServer(final Server s) {
+        s.checking = true;
+        s.checked = false;
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                boolean ok = false;
+                int pl = -1;
+                int mx = -1;
+                long ping = -1;
+                DatagramSocket sock = null;
+                try {
+                    InetAddress addr = InetAddress.getByName(s.host);
+                    byte[] ip = addr.getAddress();
+                    if (ip.length == 4) {
+                        byte[] req = new byte[11];
+                        req[0] = 'S';
+                        req[1] = 'A';
+                        req[2] = 'M';
+                        req[3] = 'P';
+                        req[4] = ip[0];
+                        req[5] = ip[1];
+                        req[6] = ip[2];
+                        req[7] = ip[3];
+                        req[8] = (byte) (s.port & 0xFF);
+                        req[9] = (byte) ((s.port >> 8) & 0xFF);
+                        req[10] = 'i';
+                        sock = new DatagramSocket();
+                        sock.setSoTimeout(2500);
+                        long t0 = System.currentTimeMillis();
+                        sock.send(new DatagramPacket(req, req.length, addr, s.port));
+                        byte[] buf = new byte[512];
+                        DatagramPacket resp = new DatagramPacket(buf, buf.length);
+                        sock.receive(resp);
+                        ping = System.currentTimeMillis() - t0;
+                        if (resp.getLength() >= 16 && buf[0] == 'S' && buf[1] == 'A'
+                                && buf[2] == 'M' && buf[3] == 'P' && buf[10] == 'i') {
+                            ok = true;
+                            pl = (buf[12] & 0xFF) | ((buf[13] & 0xFF) << 8);
+                            mx = (buf[14] & 0xFF) | ((buf[15] & 0xFF) << 8);
+                        }
+                    }
+                } catch (Exception e) {
+                    ok = false;
+                } finally {
+                    if (sock != null) sock.close();
+                }
+                s.online = ok;
+                s.players = pl;
+                s.maxPlayers = mx;
+                s.ping = ping;
+                s.checking = false;
+                s.checked = true;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (isFinishing()) return;
+                        refreshServers();
+                        refreshLeftStatus();
+                    }
+                });
+            }
+        }).start();
     }
 
     // ------------------------------------------------------------------ dialogs
@@ -441,6 +590,8 @@ public class AcropolizeLauncherActivity extends Activity {
                 selected = servers.size() - 1;
                 saveState();
                 refreshServers();
+                refreshLeftStatus();
+                queryServer(s);
                 dlg.dismiss();
             }
         });
@@ -458,6 +609,7 @@ public class AcropolizeLauncherActivity extends Activity {
                         if (selected >= servers.size()) selected = servers.size() - 1;
                         saveState();
                         refreshServers();
+                        refreshLeftStatus();
                     }
                 })
                 .setNegativeButton("Batal", null)
@@ -508,6 +660,7 @@ public class AcropolizeLauncherActivity extends Activity {
                     s.host = o.optString("host", "");
                     s.port = o.optInt("port", 7777);
                     s.password = o.optString("password", "");
+                    if (s.name.length() == 0) s.name = s.host + ":" + s.port;
                     if (s.host.length() > 0) servers.add(s);
                 }
             } catch (Exception ignored) {
