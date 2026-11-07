@@ -1,0 +1,36 @@
+name: Build SAMP APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch client yang dibangun"
+        default: "GTA-2.10"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+          submodules: recursive
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Build debug APK
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: samp-apk
+          path: |
+            app/build/outputs/apk/**/*.apk
