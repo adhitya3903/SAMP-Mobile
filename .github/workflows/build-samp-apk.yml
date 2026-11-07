@@ -47,6 +47,26 @@ jobs:
           done
           ls -la app/src/main/jniLibs/*/
 
+      - name: Perbaiki client native (alamat server tertanam, posisi tombol dan FPS)
+        run: |
+          # 1) Client selalu connect ke 94.23.168.153:2305 (alamat tertanam). Pakai host/port dari settings.ini.
+          M=app/src/main/cpp/samp/main.cpp
+          sed -i 's|new CNetGame("94.23.168.153", 2305, |new CNetGame(pSettings->Get().szHost, pSettings->Get().iPort, |' "$M"
+          grep -n "new CNetGame" "$M"
+          grep -q 'pSettings->Get().szHost, pSettings->Get().iPort' "$M" || { echo "PATCH GAGAL: main.cpp"; exit 1; }
+
+          # 2) Panel tombol (TAB ESC ALT ...) ke kiri atas
+          U=app/src/main/cpp/samp/gui/uisettings.cpp
+          sed -i 's|ImVec2(5.0f, 140.0f/\*150.0f\*/)|ImVec2(5.0f, 38.0f)|' "$U"
+          grep -n "m_buttonPanelPos = ImVec2" "$U"
+          grep -q 'ImVec2(5.0f, 38.0f)' "$U" || { echo "PATCH GAGAL: uisettings.cpp"; exit 1; }
+
+          # 3) Hitungan FPS ke kiri atas, di bawah panel tombol
+          G=app/src/main/cpp/samp/gui/gui.cpp
+          sed -i 's|pUI->ScaleY(540.0f));|pUI->ScaleY(190.0f));|' "$G"
+          grep -n "ScaleY(190.0f)" "$G"
+          grep -q 'ScaleY(190.0f)' "$G" || { echo "PATCH GAGAL: gui.cpp"; exit 1; }
+
       - name: Build debug APK
         run: |
           chmod +x gradlew
