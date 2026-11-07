@@ -74,6 +74,14 @@
             android:launchMode="singleTask"
             android:windowSoftInputMode="adjustPan"
             android:exported="true">
+    </activity>
+
+    <activity
+        android:name=".launcher.AcropolizeLauncherActivity"
+        android:screenOrientation="landscape"
+        android:theme="@style/Theme.AppCompat.NoActionBar"
+        android:windowSoftInputMode="adjustPan"
+        android:exported="true">
         <intent-filter>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
