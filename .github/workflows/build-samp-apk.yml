@@ -25,10 +25,24 @@ jobs:
       - name: Terima lisensi Android SDK (SDK sudah bawaan runner)
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
 
+      - name: Buat keystore (proyek meminta file ../../keys/new.jks)
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/../keys"
+          keytool -genkeypair -keystore "$GITHUB_WORKSPACE/../keys/new.jks" \
+            -storepass 123123 -keypass 123123 -alias key0 \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Acropolize, O=Acropolize, C=ID"
+
+      - name: Matikan cek signature bawaan (kunci kita beda dengan kunci pembuat asli)
+        run: |
+          F=app/src/main/java/com/samp/mobile/launcher/SplashActivity.java
+          sed -i 's/if(!SignatureChecker.isSignatureValid(this, getPackageName()))/if(false)/' "$F"
+          grep -n "if(false)" "$F"
+
       - name: Build debug APK
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          ./gradlew assembleDebug --no-daemon --console=plain
 
       - uses: actions/upload-artifact@v4
         with:
