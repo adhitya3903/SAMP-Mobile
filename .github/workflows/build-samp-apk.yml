@@ -39,10 +39,21 @@ jobs:
           sed -i 's/if(!SignatureChecker.isSignatureValid(this, getPackageName()))/if(false)/' "$F"
           grep -n "if(false)" "$F"
 
+      - name: Sertakan libbass.so ke APK (di-link lewat path, tidak ikut terkemas otomatis)
+        run: |
+          for abi in arm64-v8a armeabi-v7a; do
+            mkdir -p app/src/main/jniLibs/$abi
+            cp app/src/main/cpp/samp/vendor/bass/libs/$abi/libbass.so app/src/main/jniLibs/$abi/
+          done
+          ls -la app/src/main/jniLibs/*/
+
       - name: Build debug APK
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon --console=plain
+
+      - name: Daftar library native di dalam APK
+        run: unzip -l app/build/outputs/apk/debug/app-debug.apk | grep "\.so" || true
 
       - uses: actions/upload-artifact@v4
         with:
