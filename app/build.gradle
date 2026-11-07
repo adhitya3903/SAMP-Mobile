@@ -55,6 +55,13 @@ android {
             path "src/main/cpp/CMakeLists.txt"
         }
     }
+    defaultConfig {
+        externalNativeBuild {
+            cmake {
+                arguments "-DCMAKE_MAKE_PROGRAM=ninja"
+            }
+        }
+    }
 
     buildTypes {
         debug {
