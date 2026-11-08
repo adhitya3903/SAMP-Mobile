@@ -15,28 +15,32 @@ jobs:
         with:
           ref: ${{ inputs.branch }}
 
-      - name: Kumpulkan bahan analisis tahap 2
+      - name: Kumpulkan bahan loading screen
         shell: bash
         run: |
           set +e
           mkdir -p hasil/file
           M=app/src/main
 
-          g() { echo; echo "##### $1"; shift; grep -rIn "$@" $M 2>/dev/null | grep -v "/vendor/" | head -120; }
           {
-            g "Penyimpanan launcher" -E "getSharedPreferences|SharedPreferences|getFilesDir|getExternalFilesDir|settings\.ini"
-            g "Daftar server" -i -E "favourite|favorite|servers\.json|serverlist"
-          } > hasil/pencarian2.txt
+            echo "##### Referensi loading screen (Java, C++, XML)"
+            grep -rIn -i "LoadingScreen\|loading_screen\|ShowLoading\|HideLoading\|LoadingProgress\|sendLoadingScreen" $M --include=*.java --include=*.cpp --include=*.h --include=*.xml --include=*.kt | grep -v /vendor/ | head -200
+            echo
+            echo "##### Resource yang berhubungan (loading, splash, logo, progress)"
+            find $M/res -type f \( -iname "*loading*" -o -iname "*splash*" -o -iname "*logo*" -o -iname "*progress*" \)
+            echo
+            echo "##### Font yang tersedia"
+            ls $M/res/font 2>/dev/null
+          } > hasil/pencarian3.txt
 
-          cp_small() { for f in "$@"; do [ -f "$f" ] && [ "$(stat -c%s "$f")" -lt 122880 ] && cp --parents "$f" hasil/file/; done; }
-          cp_small $(find $M/java/com/samp/mobile/launcher -type f -name "*.java")
-          cp_small $(find $M/java/com/samp/mobile/game/ui -type f -iname "*dialog*")
-          cp_small $(find $M/res/layout -type f \( -iname "dialog*" -o -iname "*acropolize*" -o -iname "*launcher*" \))
-          cp_small $(find $M/res -type f \( -path "*drawable*" -o -path "*values*" \) \( -iname "*dialog*" -o -iname "colors.xml" -o -iname "styles.xml" -o -iname "themes.xml" -o -iname "*button*" -o -iname "*bg*" \))
-          cp_small $M/AndroidManifest.xml app/build.gradle app/build.gradle.kts
+          cp_small() { for f in "$@"; do [ -f "$f" ] && [ "$(stat -c%s "$f")" -lt 204800 ] && cp --parents "$f" hasil/file/; done; }
+
+          cp_small $(grep -rIl -i "LoadingScreen\|ShowLoading\|HideLoading" $M --include=*.java --include=*.cpp --include=*.h --include=*.kt | grep -v /vendor/)
+          cp_small $(find $M/res -type f \( -name "*.xml" \) \( -iname "*loading*" -o -iname "*splash*" -o -iname "*logo*" -o -iname "*progress*" \))
+          cp_small $M/java/com/samp/mobile/game/SAMP.java $M/cpp/samp/java/jniutil.cpp $M/cpp/samp/java/jniutil.h
           du -sh hasil
 
       - uses: actions/upload-artifact@v4
         with:
-          name: hasil-analisis-2
+          name: hasil-analisis-3
           path: hasil/
