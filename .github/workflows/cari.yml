@@ -15,33 +15,28 @@ jobs:
         with:
           ref: ${{ inputs.branch }}
 
-      - name: Kumpulkan bahan analisis
+      - name: Kumpulkan bahan analisis tahap 2
         shell: bash
         run: |
           set +e
-          export LC_ALL=C.UTF-8
-          S=app/src/main/cpp/samp
           mkdir -p hasil/file
+          M=app/src/main
 
-          find app/src/main -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.java" \) -not -path "*/vendor/*" | sort > hasil/00_daftar_file.txt
-          cp patches/hud.patch hasil/01_hud.patch
-
-          g() { echo; echo "##### $1"; shift; grep -rIn "$@" app/src/main 2>/dev/null | grep -v "/vendor/" | head -150; }
+          g() { echo; echo "##### $1"; shift; grep -rIn "$@" $M 2>/dev/null | grep -v "/vendor/" | head -120; }
           {
-            g "Teks Rusia" -P "[\x{0400}-\x{04FF}]" --include=*.cpp --include=*.h --include=*.java --include=*.xml
-            g "Tombol >>" -F '">>"'
-            g "Lampu dan parameter kendaraan" -i -E "VehicleParams|bLightsOn|LightsOn|SetLights|headlight"
-            g "Custom model dan DL" -i -E "AddSimpleModel|CustomModel|DL-R1|0\.3\.DL|ModelDownload|Updating models|artwork"
-            g "Versi dan net version" -E "0\.3\.7|4057|4062|NetVersion|iVersion|szVersion"
-            g "Timeout dan koneksi" -i -E "ConnectionTimeout|SetTimeout|ConnectionLost|DisconnectionNotification"
-          } > hasil/02_pencarian.txt
+            g "Penyimpanan launcher" -E "getSharedPreferences|SharedPreferences|getFilesDir|getExternalFilesDir|settings\.ini"
+            g "Daftar server" -i -E "favourite|favorite|servers\.json|serverlist"
+          } > hasil/pencarian2.txt
 
           cp_small() { for f in "$@"; do [ -f "$f" ] && [ "$(stat -c%s "$f")" -lt 122880 ] && cp --parents "$f" hasil/file/; done; }
-          cp_small $(find $S -type f \( -iname "*dialog*" -o -iname "*uisettings*" -o -iname "*theme*" -o -iname "*style*" -o -iname "settings.*" -o -iname "*vehicle*" -o -iname "*rpc*" -o -iname "*netgame*" -o -name "main.cpp" \) -not -path "*/vendor/*" -not -path "*/voice_new/*")
-          cp_small $(grep -rIlF '">>"' app/src/main | grep -v /vendor/)
+          cp_small $(find $M/java/com/samp/mobile/launcher -type f -name "*.java")
+          cp_small $(find $M/java/com/samp/mobile/game/ui -type f -iname "*dialog*")
+          cp_small $(find $M/res/layout -type f \( -iname "dialog*" -o -iname "*acropolize*" -o -iname "*launcher*" \))
+          cp_small $(find $M/res -type f \( -path "*drawable*" -o -path "*values*" \) \( -iname "*dialog*" -o -iname "colors.xml" -o -iname "styles.xml" -o -iname "themes.xml" -o -iname "*button*" -o -iname "*bg*" \))
+          cp_small $M/AndroidManifest.xml app/build.gradle app/build.gradle.kts
           du -sh hasil
 
       - uses: actions/upload-artifact@v4
         with:
-          name: hasil-analisis
+          name: hasil-analisis-2
           path: hasil/
