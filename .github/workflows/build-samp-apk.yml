@@ -114,16 +114,30 @@ jobs:
           sed -i 's/Нажмите для ввода/Ketuk untuk mengisi/; s/Войти/Masuk/; s/Отмена/Batal/' "$F"
           grep -n 'hint=\|android:text=' "$F" | head -10
 
-      - name: Siapkan Gradle (ulangi kalau download timeout)
+      - uses: actions/cache@v4
+        with:
+          path: ~/.gradle/wrapper/dists
+          key: gradle-wrapper-dists-8.9
+
+      - name: Siapkan Gradle (server resmi dulu, lalu mirror cadangan)
         run: |
           chmod +x gradlew
-          sed -i 's/networkTimeout=10000/networkTimeout=120000/' gradle/wrapper/gradle-wrapper.properties
-          for i in 1 2 3 4; do
-            ./gradlew --version --no-daemon && exit 0
-            echo "Download Gradle gagal (percobaan $i), tunggu lalu coba lagi..."
-            sleep 20
+          P=gradle/wrapper/gradle-wrapper.properties
+          sed -i 's/networkTimeout=10000/networkTimeout=120000/' "$P"
+          ok=0
+          for i in 1 2 3; do
+            if ./gradlew --version --no-daemon; then ok=1; break; fi
+            echo ">>> Server resmi gagal (percobaan $i), tunggu 30 detik..."
+            sleep 30
           done
-          exit 1
+          if [ "$ok" != 1 ]; then
+            for U in "https://mirrors.cloud.tencent.com/gradle/gradle-8.9-bin.zip" "https://repo.huaweicloud.com/gradle/gradle-8.9-bin.zip"; do
+              echo ">>> Mencoba mirror: $U"
+              sed -i "s|^distributionUrl=.*|distributionUrl=${U}|" "$P"
+              if ./gradlew --version --no-daemon; then ok=1; break; fi
+            done
+          fi
+          [ "$ok" = 1 ] || { echo "Semua sumber Gradle gagal"; exit 1; }
 
       - name: Build debug APK
         run: |
