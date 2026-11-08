@@ -6,6 +6,9 @@ on:
       branch:
         description: "Branch client yang dibangun"
         default: "GTA-2.10"
+      ekspor_keystore:
+        description: "Isi 'ya' HANYA SEKALI untuk mengambil keystore. Biasanya biarkan 'tidak'"
+        default: "tidak"
       offsets:
         description: "Offset crash dari logcat (pisah spasi)"
         default: "0x149158 0x15bccc 0x14a2dc 0x1486a4"
@@ -28,13 +31,21 @@ jobs:
       - name: Terima lisensi Android SDK (SDK sudah bawaan runner)
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
 
-      - name: Buat keystore (proyek meminta file ../../keys/new.jks)
+      - name: Siapkan keystore (tetap dari Secrets, atau buat baru kalau belum ada)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
           mkdir -p "$GITHUB_WORKSPACE/../keys"
-          keytool -genkeypair -keystore "$GITHUB_WORKSPACE/../keys/new.jks" \
-            -storepass 123123 -keypass 123123 -alias key0 \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -dname "CN=Acropolize, O=Acropolize, C=ID"
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$GITHUB_WORKSPACE/../keys/new.jks"
+            echo ">>> Memakai keystore TETAP dari Secrets"
+          else
+            keytool -genkeypair -keystore "$GITHUB_WORKSPACE/../keys/new.jks" \
+              -storepass 123123 -keypass 123123 -alias key0 \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Acropolize, O=Acropolize, C=ID"
+            echo ">>> PERINGATAN: Secret KEYSTORE_BASE64 belum ada, keystore BARU dibuat. APK ini tidak bisa menimpa versi lama."
+          fi
 
       - name: Matikan cek signature bawaan (kunci kita beda dengan kunci pembuat asli)
         run: |
@@ -64,6 +75,13 @@ jobs:
           git apply patches/hud.patch
           git diff --stat
 
+      - name: Atur posisi dan ketebalan HUD (tombol >> di bawah radar, lebih tebal)
+        run: |
+          F=app/src/main/cpp/samp/settings.cpp
+          sed -i 's/"ButtonPanelPosY", 38.0f/"ButtonPanelPosY", 160.0f/; s/"FPSPosY", 110.0f/"FPSPosY", 335.0f/; s/"HudAlpha", 0.35f/"HudAlpha", 0.75f/' "$F"
+          grep -n "ButtonPanelPosY\|FPSPosY\|HudAlpha" "$F"
+          grep -q '"ButtonPanelPosY", 160.0f' "$F" || { echo "PATCH GAGAL: HUD default"; exit 1; }
+
       - name: Fix crash tombol voice (texture voiceactive/voicepassive tidak ada)
         run: |
           python3 - <<'PY'
@@ -75,6 +93,26 @@ jobs:
           open(p, 'w', encoding='utf-8').write(s)
           PY
           grep -n -B1 -A3 "fix: texture voice" app/src/main/cpp/samp/gui/samp_widgets/voicebutton.h
+
+      - name: Fix lampu mobil menyala sendiri (status UNSET -1/255 dibaca ON)
+        run: |
+          python3 - <<'PY'
+          import re
+          p = 'app/src/main/cpp/samp/game/vehicle.cpp'
+          s = open(p, encoding='utf-8').read()
+          pat = r'm_pVehicle->m_nVehicleFlags\.bLightsOn\s*=\s*iState\s*;'
+          assert len(re.findall(pat, s)) == 1, 'PATCH GAGAL: vehicle.cpp'
+          s = re.sub(pat, 'if (iState == 0 || iState == 1) m_pVehicle->m_nVehicleFlags.bLightsOn = iState; // fix: UNSET (-1/255) jangan dibaca ON', s)
+          open(p, 'w', encoding='utf-8').write(s)
+          PY
+          grep -n "fix: UNSET" app/src/main/cpp/samp/game/vehicle.cpp
+
+      - name: Terjemahkan teks Rusia di dialog login
+        run: |
+          F=app/src/main/res/layout/dialog.xml
+          test -f "$F" || { echo "PATCH GAGAL: dialog.xml tidak ada"; exit 1; }
+          sed -i 's/Нажмите для ввода/Ketuk untuk mengisi/; s/Войти/Masuk/; s/Отмена/Batal/' "$F"
+          grep -n 'hint=\|android:text=' "$F" | head -10
 
       - name: Build debug APK
         run: |
@@ -99,9 +137,15 @@ jobs:
           path: |
             app/build/outputs/apk/**/*.apk
 
+      - name: Salin keystore untuk diekspor (hanya kalau diminta)
+        if: ${{ inputs.ekspor_keystore == 'ya' }}
+        run: |
+          mkdir -p export-keystore
+          cp "$GITHUB_WORKSPACE/../keys/new.jks" export-keystore/new.jks
+
       - uses: actions/upload-artifact@v4
-        continue-on-error: true
+        if: ${{ inputs.ekspor_keystore == 'ya' }}
         with:
-          name: libsamp-symbols
-          if-no-files-found: warn
-          path: app/build/intermediates/cxx/**/obj/arm64-v8a/libsamp.so
+          name: keystore-RAHASIA
+          path: export-keystore/new.jks
+          retention-days: 1
