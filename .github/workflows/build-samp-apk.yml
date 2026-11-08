@@ -113,7 +113,17 @@ jobs:
           test -f "$F" || { echo "PATCH GAGAL: dialog.xml tidak ada"; exit 1; }
           sed -i 's/Нажмите для ввода/Ketuk untuk mengisi/; s/Войти/Masuk/; s/Отмена/Batal/' "$F"
           grep -n 'hint=\|android:text=' "$F" | head -10
-
+            - name: Siapkan Gradle (ulangi kalau download timeout)
+        run: |
+          chmod +x gradlew
+          sed -i 's/networkTimeout=10000/networkTimeout=120000/' gradle/wrapper/gradle-wrapper.properties
+          for i in 1 2 3 4; do
+            ./gradlew --version --no-daemon && exit 0
+            echo "Download Gradle gagal (percobaan $i), tunggu lalu coba lagi..."
+            sleep 20
+          done
+          exit 1
+      
       - name: Build debug APK
         run: |
           chmod +x gradlew
