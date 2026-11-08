@@ -6,6 +6,9 @@ on:
       branch:
         description: "Branch client yang dibangun"
         default: "GTA-2.10"
+      offsets:
+        description: "Offset crash dari logcat (pisah spasi)"
+        default: "0x149158 0x15bccc 0x14a2dc 0x1486a4"
 
 jobs:
   build:
@@ -66,6 +69,20 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon --console=plain
 
+      - name: Terjemahkan offset crash ke nama fungsi
+        continue-on-error: true
+        run: |
+          echo "=== Semua libsamp.so hasil build ==="
+          find app/build -name libsamp.so -exec ls -la {} \;
+          SO=$(find app/build -path "*obj/arm64-v8a/libsamp.so" | head -1)
+          echo "Unstripped libsamp.so: $SO"
+          ADDR2LINE=$(find "$ANDROID_HOME/ndk" -name llvm-addr2line | head -1)
+          READELF=$(dirname "$ADDR2LINE")/llvm-readelf
+          echo "=== BUILD ID (crash lama: f2d6c61f11df0b9a5cf15dbe15589deee3282492) ==="
+          "$READELF" -n "$SO" | grep -i "build id"
+          echo "=== HASIL ADDR2LINE ==="
+          "$ADDR2LINE" -f -C -i -p -e "$SO" ${{ inputs.offsets }}
+
       - name: Daftar library native di dalam APK
         run: unzip -l app/build/outputs/apk/debug/app-debug.apk | grep "\.so" || true
 
@@ -74,3 +91,10 @@ jobs:
           name: samp-apk
           path: |
             app/build/outputs/apk/**/*.apk
+
+      - uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: libsamp-symbols
+          if-no-files-found: warn
+          path: app/build/intermediates/cxx/**/obj/arm64-v8a/libsamp.so
