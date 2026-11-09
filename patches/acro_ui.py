@@ -131,11 +131,20 @@ print('OK  renderer')
 # ------------------------------------------------------------------ 5. Tombol HUD (TAB/ESC/Y/>>) dan Spawn/panah
 p = S + '/gui/widgets/button.cpp'
 s = rd(p)
-s = patch(s,
-          r'renderer->drawRect\(absolutePosition\(\), absolutePosition\(\) \+ size\(\),\s*focused\(\) \? m_colorFocused : m_color, true\);.*?UISettings::outlineSize\(\)\);',
-          'renderer->drawGlassButton(absolutePosition(), absolutePosition() + size(), m_color, focused());\n'
-          '\tm_label->setColor(focused() ? ImColor(0.07f, 0.07f, 0.07f) : ImColor(1.0f, 1.0f, 1.0f));',
-          'button draw', count=3)
+# Cocok untuk 3 tombol: Button biasa (Spawn, panah) serta CButton dan OButton (versi HUD, memakai hudAlpha)
+btn_pat = (r'renderer->drawRect\(absolutePosition\(\), absolutePosition\(\) \+ size\(\),\s*'
+           r'(hudAlpha\()?focused\(\) \? m_colorFocused : m_color\)?, true\);.*?UISettings::outlineSize\(\)\);')
+n = len(re.findall(btn_pat, s, re.S))
+assert n == 3, 'PATCH GAGAL [button draw]: ditemukan %d, seharusnya 3' % n
+
+
+def btn_repl(m):
+    base = 'hudAlpha(m_color)' if m.group(1) else 'm_color'
+    return ('renderer->drawGlassButton(absolutePosition(), absolutePosition() + size(), ' + base + ', focused());\n'
+            '\tm_label->setColor(focused() ? ImColor(0.07f, 0.07f, 0.07f) : ImColor(1.0f, 1.0f, 1.0f));')
+
+
+s = re.sub(btn_pat, btn_repl, s, flags=re.S)
 wr(p, s)
 print('OK  tombol HUD')
 
