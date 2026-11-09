@@ -15,32 +15,40 @@ jobs:
         with:
           ref: ${{ inputs.branch }}
 
-      - name: Kumpulkan bahan loading screen
+      - name: Kumpulkan bahan analisis tahap 4
         shell: bash
         run: |
           set +e
           mkdir -p hasil/file
-          M=app/src/main
+          S=app/src/main/cpp/samp
+          J=app/src/main/java
 
+          g() { echo; echo "##### $1"; shift; grep -rIn "$@" app/src/main 2>/dev/null | grep -v "/vendor/" | head -80; }
           {
-            echo "##### Referensi loading screen (Java, C++, XML)"
-            grep -rIn -i "LoadingScreen\|loading_screen\|ShowLoading\|HideLoading\|LoadingProgress\|sendLoadingScreen" $M --include=*.java --include=*.cpp --include=*.h --include=*.xml --include=*.kt | grep -v /vendor/ | head -200
-            echo
-            echo "##### Resource yang berhubungan (loading, splash, logo, progress)"
-            find $M/res -type f \( -iname "*loading*" -o -iname "*splash*" -o -iname "*logo*" -o -iname "*progress*" \)
-            echo
-            echo "##### Font yang tersedia"
-            ls $M/res/font 2>/dev/null
-          } > hasil/pencarian3.txt
+            echo "##### Daftar file gui dan game/ui"
+            find $S/gui $J/com/samp/mobile/game -type f | sort
+            g "Input chat dan perintah klien" -i -E "sendChatMessage|SendCommand|onSendMessage|ProcessInput|isCommand|ExitGame|exitGame"
+            g "Touch dan joystick" -i -E "TouchEvent|touchPop|touchPush|CTouchInterface|joystick|ProcessTouch|AND_Touch"
+            g "Pilih textdraw" -i -E "SelectTextDraw|ClickTextDraw|bSelect|m_bSelect"
+            g "Class selection" -i -E "SendSpawn|SendPrevClass|SendNextClass|ClassSelection"
+            g "Keyboard Android vs bawaan" -i -E "androidkeyboard|bAndroidKeyboard|showKeyboard|hideKeyboard|ShowInput|HideInput"
+            g "Audio stream" -i -E "CAudioStream|BASS_Init|BASS_StreamCreate"
+          } > hasil/pencarian4.txt
 
-          cp_small() { for f in "$@"; do [ -f "$f" ] && [ "$(stat -c%s "$f")" -lt 204800 ] && cp --parents "$f" hasil/file/; done; }
+          cp_small() { for f in "$@"; do [ -f "$f" ] && [ "$(stat -c%s "$f")" -lt 153600 ] && cp --parents "$f" hasil/file/; done; }
+          cp_big() { for f in "$@"; do [ -f "$f" ] && [ "$(stat -c%s "$f")" -lt 614400 ] && cp --parents "$f" hasil/file/; done; }
 
-          cp_small $(grep -rIl -i "LoadingScreen\|ShowLoading\|HideLoading" $M --include=*.java --include=*.cpp --include=*.h --include=*.kt | grep -v /vendor/)
-          cp_small $(find $M/res -type f \( -name "*.xml" \) \( -iname "*loading*" -o -iname "*splash*" -o -iname "*logo*" -o -iname "*progress*" \))
-          cp_small $M/java/com/samp/mobile/game/SAMP.java $M/cpp/samp/java/jniutil.cpp $M/cpp/samp/java/jniutil.h
+          cp_big $S/main.cpp $S/main.h $S/audiostream.cpp $S/audiostream.h
+          cp_small $(find $S/gui -type f \( -name "*.cpp" -o -name "*.h" \) -not -path "*/vendor/*" | grep -i -E "keyboard|button|chat|touch|imgui|renderer|gui\.|widget|input|dialog|textdraw|spawn|class|layout|label")
+          cp_small $(grep -rIl -i "SelectTextDraw" $S | grep -v /vendor/)
+          cp_small $(grep -rIl -i -E "TouchEvent|ProcessTouch|CTouchInterface" $S | grep -v /vendor/)
+          cp_small $(find $J/com/samp/mobile/game -type f -name "*.java" | grep -i -E "keyboard|input|edit|chat|dialog|attach|height")
+          cp_small $(find app/src/main/res/layout -type f \( -iname "*keyboard*" -o -iname "*input*" -o -iname "*chat*" -o -iname "*edit*" \))
+          cp_small $(find app/src/main/res -type f -name "*.xml" \( -path "*drawable*" -o -path "*values*" \) \( -iname "*keyboard*" -o -iname "*chat*" -o -iname "*input*" -o -iname "*pink*" \))
           du -sh hasil
+          find hasil/file -type f | wc -l
 
       - uses: actions/upload-artifact@v4
         with:
-          name: hasil-analisis-3
+          name: hasil-analisis-4
           path: hasil/
