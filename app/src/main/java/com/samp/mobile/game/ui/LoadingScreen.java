@@ -84,8 +84,10 @@ public class LoadingScreen {
         this.activity = activity;
         DisplayMetrics dm = activity.getResources().getDisplayMetrics();
         this.density = dm.density;
-        int shortSide = Math.min(dm.widthPixels, dm.heightPixels);
-        int ringSize = Math.max(dp(110), Math.min(dp(200), Math.round(shortSide * 0.40f)));
+        // Tinggi layar (dp) dipakai untuk menentukan ukuran cincin supaya tidak bertabrakan di HP kecil.
+        float heightDp = Math.min(dm.widthPixels, dm.heightPixels) / dm.density;
+        float ringDp = Math.max(84f, Math.min(200f, heightDp - 26f - 80f - 98f - 10f));
+        int ringSize = dp(ringDp);
         int bandH = dp(150);
         this.tipIndex = new Random().nextInt(TIPS.length);
 
@@ -108,21 +110,33 @@ public class LoadingScreen {
         scanTravel = dm.heightPixels + bandH;
         scanBand.setTranslationY(-bandH);
 
-        // Kolom utama: cincin progres + logo, judul, persen, tahap
+        // Susunan vertikal: [baris info versi] [area tengah] [kartu tips] -> tidak mungkin saling menimpa
+        LinearLayout content = new LinearLayout(activity);
+        content.setOrientation(LinearLayout.VERTICAL);
+        root.addView(content, new FrameLayout.LayoutParams(-1, -1));
+
+        FrameLayout topRow = new FrameLayout(activity);
+        TextView ver = text(versionLine(), 9.5f, medium, 0x73FFFFFF, 0.10f);
+        FrameLayout.LayoutParams verP = new FrameLayout.LayoutParams(-2, -2, Gravity.END | Gravity.CENTER_VERTICAL);
+        verP.rightMargin = dp(16);
+        topRow.addView(ver, verP);
+        content.addView(topRow, new LinearLayout.LayoutParams(-1, dp(26)));
+
+        FrameLayout middle = new FrameLayout(activity);
+        content.addView(middle, new LinearLayout.LayoutParams(-1, 0, 1f));
+
         LinearLayout col = new LinearLayout(activity);
         col.setOrientation(LinearLayout.VERTICAL);
         col.setGravity(Gravity.CENTER_HORIZONTAL);
-        FrameLayout.LayoutParams colP = new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER);
-        colP.bottomMargin = dp(52);
-        root.addView(col, colP);
+        middle.addView(col, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
 
         FrameLayout ringFrame = new FrameLayout(activity);
         ring = new RingView(activity, density);
         ringFrame.addView(ring, new FrameLayout.LayoutParams(ringSize, ringSize));
         ImageView logo = new ImageView(activity);
-        logo.setImageResource(R.drawable.logo);
+        logo.setImageResource(logoRes());
         logo.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        int logoSize = Math.round(ringSize * 0.56f);
+        int logoSize = Math.round(ringSize * 0.62f);
         ringFrame.addView(logo, new FrameLayout.LayoutParams(logoSize, logoSize, Gravity.CENTER));
         col.addView(ringFrame, new LinearLayout.LayoutParams(ringSize, ringSize));
 
@@ -170,18 +184,12 @@ public class LoadingScreen {
         tipP.leftMargin = dp(12);
         tipCard.addView(tipText, tipP);
 
-        int cardW = Math.min(dm.widthPixels - dp(48), dp(560));
-        FrameLayout.LayoutParams cardP = new FrameLayout.LayoutParams(cardW, -2,
-                Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
-        cardP.bottomMargin = dp(24);
-        root.addView(tipCard, cardP);
-
-        // Info versi di pojok kanan atas
-        TextView ver = text(versionLine(), 9.5f, medium, 0x73FFFFFF, 0.12f);
-        FrameLayout.LayoutParams verP = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
-        verP.topMargin = dp(16);
-        verP.rightMargin = dp(20);
-        root.addView(ver, verP);
+        int cardW = Math.min(dm.widthPixels - dp(32), dp(560));
+        LinearLayout.LayoutParams cardP = new LinearLayout.LayoutParams(cardW, -2);
+        cardP.gravity = Gravity.CENTER_HORIZONTAL;
+        cardP.topMargin = dp(6);
+        cardP.bottomMargin = dp(18);
+        content.addView(tipCard, cardP);
 
         // Garis progres tipis di tepi bawah layar
         barFill = new View(activity);
@@ -262,6 +270,12 @@ public class LoadingScreen {
         return s;
     }
 
+    /** Logo transparan: pakai "acro_logo_clear" kalau kamu upload, kalau tidak pakai acro_logo bawaan. */
+    private int logoRes() {
+        int id = activity.getResources().getIdentifier("acro_logo_clear", "drawable", activity.getPackageName());
+        return id != 0 ? id : R.drawable.acro_logo;
+    }
+
     private int dp(float v) {
         return Math.round(v * density);
     }
@@ -280,7 +294,7 @@ public class LoadingScreen {
     private TextView text(String s, float sp, Typeface tf, int color, float spacing) {
         TextView t = new TextView(activity);
         t.setText(s);
-        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_DIP, sp);
         t.setTypeface(tf);
         t.setTextColor(color);
         t.setLetterSpacing(spacing);
@@ -297,10 +311,10 @@ public class LoadingScreen {
         } catch (Exception ignored) {
         }
         String abi = (Build.SUPPORTED_ABIS != null && Build.SUPPORTED_ABIS.length > 0) ? Build.SUPPORTED_ABIS[0] : "";
-        String s = "ACROPOLIZE CLIENT";
-        if (!v.isEmpty()) s += "  \u2022  v" + v;
-        if (!abi.isEmpty()) s += "  \u2022  " + abi;
-        return s;
+        String s = "";
+        if (!v.isEmpty()) s = "v" + v;
+        if (!abi.isEmpty()) s += (s.isEmpty() ? "" : "  \u2022  ") + abi;
+        return s.isEmpty() ? "ACROPOLIZE CLIENT" : "ACROPOLIZE  \u2022  " + s;
     }
 
     // ---------------------------------------------------------------- views
