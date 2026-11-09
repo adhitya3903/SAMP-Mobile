@@ -9,6 +9,9 @@ on:
       ekspor_keystore:
         description: "Isi 'ya' HANYA SEKALI untuk mengambil keystore. Biasanya biarkan 'tidak'"
         default: "tidak"
+      abi:
+        description: "Arsitektur untuk membaca crash: arm64-v8a (Redmi 9T) atau armeabi-v7a (Redmi 6A)"
+        default: "arm64-v8a"
       offsets:
         description: "Offset crash dari logcat (pisah spasi)"
         default: "0x149158 0x15bccc 0x14a2dc 0x1486a4"
@@ -106,6 +109,19 @@ jobs:
           open(p, 'w', encoding='utf-8').write(s)
           PY
           grep -n "fix: UNSET" app/src/main/cpp/samp/game/vehicle.cpp
+
+      - name: Fix mesin kendaraan menyala sendiri (mode manual, status UNSET = mati)
+        run: |
+          python3 - <<'PY'
+          import re
+          p = 'app/src/main/cpp/samp/net/vehiclepool.cpp'
+          s = open(p, encoding='utf-8').read()
+          pat = r'(if\s*\(\s*pNetGame->m_pNetSet->bManualVehicleEngineAndLight\s*\)\s*\{\s*)pVehicle->ApplyEngineState\(\s*pVehicle->GetEngineState\(\)\s*\)\s*;'
+          assert len(re.findall(pat, s)) == 1, 'PATCH GAGAL: vehiclepool.cpp'
+          s = re.sub(pat, r'\1pVehicle->ApplyEngineState(pVehicle->GetEngineState() == 1 ? 1 : 0); // fix: mode manual, UNSET = mati', s)
+          open(p, 'w', encoding='utf-8').write(s)
+          PY
+          grep -n "fix: mode manual" app/src/main/cpp/samp/net/vehiclepool.cpp
 
       - name: Terjemahkan teks Rusia di dialog login
         run: |
@@ -216,9 +232,10 @@ jobs:
       - name: Terjemahkan offset crash ke nama fungsi
         continue-on-error: true
         run: |
-          SO=$(find app/build -path "*obj/arm64-v8a/libsamp.so" | head -1)
+          SO=$(find app/build -path "*obj/${{ inputs.abi }}/libsamp.so" | head -1)
           ADDR2LINE=$(find "$ANDROID_HOME/ndk" -name llvm-addr2line | head -1)
           READELF=$(dirname "$ADDR2LINE")/llvm-readelf
+          echo "File simbol: $SO"
           "$READELF" -n "$SO" | grep -i "build id"
           "$ADDR2LINE" -f -C -i -p -e "$SO" ${{ inputs.offsets }}
 
@@ -230,6 +247,13 @@ jobs:
           name: samp-apk
           path: |
             app/build/outputs/apk/**/*.apk
+
+      - uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: libsamp-symbols
+          if-no-files-found: warn
+          path: app/build/intermediates/cxx/**/obj/*/libsamp.so
 
       - name: Salin keystore untuk diekspor (hanya kalau diminta)
         if: ${{ inputs.ekspor_keystore == 'ya' }}
