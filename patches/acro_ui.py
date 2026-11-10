@@ -71,8 +71,26 @@ seg = s[a:b]
 k = seg.rfind('return true;')
 assert k > 0 and seg.count('return true;') == 2, 'PATCH GAGAL [textdraw touch]: struktur fungsi berbeda'
 seg = seg[:k] + 'return false; // fix: mode pilih textdraw, jangan teruskan sentuhan ke analog' + seg[k + len('return true;'):]
+s = s[:a] + seg + s[b:]
+s = patch(s, r'extern UI\* pUI;', 'extern UI* pUI;\nextern void (*AND_TouchEvent)(int type, int num, int posX, int posY);', 'textdraw extern')
+s = patch(s, r'pGame->FindPlayerPed\(\)->TogglePlayerControllable\(false\);',
+          'pGame->FindPlayerPed()->TogglePlayerControllable(false);\n'
+          '        // fix: lepaskan semua jari yang mungkin masih "tertahan" di analog saat mode pilih dimulai\n'
+          '        for (int i = 0; i < 3; i++) AND_TouchEvent(1, i, 0, 0);\n'
+          '        FLog("SelectTextDraw: aktif");',
+          'textdraw release')
+wr(p, s)
+
+# jari ke-2/3 harus dilepas dengan nomor yang sama (sebelumnya selalu jari ke-0 -> analog nyangkut)
+p = S + '/game/hooks.cpp'
+s = rd(p)
+a = s.index('void AND_TouchEvent_hook(int type, int num, int posX, int posY)')
+b = s.index('/* ====', a)
+seg = s[a:b]
+assert seg.count('AND_TouchEvent(1, 0, 0, 0)') == 3, 'PATCH GAGAL [hook sentuhan]: ditemukan %d' % seg.count('AND_TouchEvent(1, 0, 0, 0)')
+seg = seg.replace('AND_TouchEvent(1, 0, 0, 0)', 'AND_TouchEvent(1, num, 0, 0)')
 wr(p, s[:a] + seg + s[b:])
-print('OK  sentuhan textdraw')
+print('OK  sentuhan textdraw dan analog')
 
 # ------------------------------------------------------------------ 4. Renderer: kotak membulat + tombol kaca
 p = S + '/gui/imguirenderer.h'
@@ -254,7 +272,20 @@ assert s.count('androidkeyboard = true') == 1, 'PATCH GAGAL [launcher keyboard]'
 s = s.replace('androidkeyboard = true', 'androidkeyboard = false')
 with open(p, 'w', encoding='utf-8', newline='') as f:
     f.write(s)
-print('OK  launcher default keyboard')
+pat = r'(String\[\]\[\] kv = \{\s*\{ "name", nick \})'
+assert len(re.findall(pat, s)) == 1, 'PATCH GAGAL [launcher migrasi]'
+s = re.sub(pat, lambda m: (
+    '// Migrasi satu kali: pakai keyboard bawaan client (transparan) menggantikan keyboard sistem\n'
+    '        if (!prefs.getBoolean("kb_native_v1", false)) {\n'
+    '            for (int i = 0; i < lines.size(); i++) {\n'
+    '                if (lines.get(i).trim().toLowerCase().startsWith("androidkeyboard")) lines.set(i, "androidkeyboard = false");\n'
+    '            }\n'
+    '            prefs.edit().putBoolean("kb_native_v1", true).apply();\n'
+    '        }\n\n'
+    '        ' + m.group(1)), s)
+with open(p, 'w', encoding='utf-8', newline='') as f:
+    f.write(s)
+print('OK  launcher default keyboard dan migrasi')
 
 # ------------------------------------------------------------------ 8. Bilah input keyboard Android (3 tombol pink -> emas)
 D = M + '/res/drawable/'
@@ -262,8 +293,8 @@ files = {
     'acro_kb_bar.xml': '''<?xml version="1.0" encoding="utf-8"?>
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
     <corners android:radius="16dp"/>
-    <solid android:color="#CC101018"/>
-    <stroke android:width="1dp" android:color="#66FFD400"/>
+    <solid android:color="#52FFFFFF"/>
+    <stroke android:width="1.5dp" android:color="#99FFD400"/>
 </shape>
 ''',
     'acro_kb_btn.xml': '''<?xml version="1.0" encoding="utf-8"?>
@@ -288,7 +319,6 @@ assert s.count('android:textColor="#000000"') == 1, 'PATCH GAGAL [layout teks]'
 assert s.count('android:textStyle="bold" />') == 3, 'PATCH GAGAL [layout bold]'
 s = s.replace('android:background="#65FFFFFF"', 'android:background="@drawable/acro_kb_bar"')
 s = s.replace('@drawable/ic_buttoncolor', '@drawable/acro_kb_btn')
-s = s.replace('android:textColor="#000000"', 'android:textColor="#FFFFFFFF"')
 s = s.replace('android:textStyle="bold" />', 'android:textColor="#FF111111"\n            android:textStyle="bold" />')
 with open(p, 'w', encoding='utf-8', newline='') as f:
     f.write(s)
