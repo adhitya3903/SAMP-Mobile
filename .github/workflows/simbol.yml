@@ -1,0 +1,69 @@
+name: Baca crash (simbol)
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Nomor run Build SAMP APK yang APK-nya terpasang di HP (angka di akhir URL halaman run)"
+        required: true
+      abi:
+        description: "arm64-v8a (Redmi 9T) atau armeabi-v7a (Redmi 6A)"
+        default: "armeabi-v7a"
+      offsets:
+        description: "Alamat pc dari logcat, format 0x..., pisah spasi. Alamat ganjil (Thumb) dikurangi 1"
+        default: "0x1974ec 0xcd3ac 0xf8ea4 0xbc322"
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  simbol:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: libsamp-symbols
+          path: simbol
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: samp-apk
+          path: apk
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Peta library di dalam APK (offset file dan nama)
+        run: |
+          python3 - <<'PY'
+          import glob, struct, zipfile
+          apk = glob.glob('apk/**/*.apk', recursive=True)[0]
+          z = zipfile.ZipFile(apk)
+          f = open(apk, 'rb')
+          rows = []
+          for i in z.infolist():
+              if i.filename.endswith('.so'):
+                  f.seek(i.header_offset)
+                  h = f.read(30)
+                  n, e = struct.unpack('<HH', h[26:30])
+                  start = i.header_offset + 30 + n + e
+                  rows.append((start, i.filename, i.file_size, i.compress_type))
+          rows.sort()
+          print('%-12s %-45s %-10s %s' % ('OFFSET', 'LIBRARY', 'UKURAN', 'TERSIMPAN'))
+          for start, name, size, ct in rows:
+              print('0x%-10x %-45s %-10d %s' % (start, name, size, 'stored' if ct == 0 else 'compressed'))
+          PY
+
+      - name: Terjemahkan alamat ke nama fungsi
+        run: |
+          SO=$(find simbol -path "*obj/${{ inputs.abi }}/libsamp.so" | head -1)
+          echo "File simbol: $SO"
+          ADDR2LINE=$(find "$ANDROID_HOME/ndk" -name llvm-addr2line | head -1)
+          READELF=$(dirname "$ADDR2LINE")/llvm-readelf
+          "$READELF" -n "$SO" | grep -i "build id"
+          for a in ${{ inputs.offsets }}; do
+            echo "== $a"
+            "$ADDR2LINE" -f -C -i -p -e "$SO" "$a"
+          done
