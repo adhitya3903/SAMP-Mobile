@@ -15,40 +15,30 @@ jobs:
         with:
           ref: ${{ inputs.branch }}
 
-      - name: Kumpulkan bahan analisis tahap 4
+      - name: Kumpulkan bahan analisis tahap 5
         shell: bash
         run: |
           set +e
           mkdir -p hasil/file
           S=app/src/main/cpp/samp
-          J=app/src/main/java
 
           g() { echo; echo "##### $1"; shift; grep -rIn "$@" app/src/main 2>/dev/null | grep -v "/vendor/" | head -80; }
           {
-            echo "##### Daftar file gui dan game/ui"
-            find $S/gui $J/com/samp/mobile/game -type f | sort
-            g "Input chat dan perintah klien" -i -E "sendChatMessage|SendCommand|onSendMessage|ProcessInput|isCommand|ExitGame|exitGame"
-            g "Touch dan joystick" -i -E "TouchEvent|touchPop|touchPush|CTouchInterface|joystick|ProcessTouch|AND_Touch"
-            g "Pilih textdraw" -i -E "SelectTextDraw|ClickTextDraw|bSelect|m_bSelect"
-            g "Class selection" -i -E "SendSpawn|SendPrevClass|SendNextClass|ClassSelection"
-            g "Keyboard Android vs bawaan" -i -E "androidkeyboard|bAndroidKeyboard|showKeyboard|hideKeyboard|ShowInput|HideInput"
-            g "Audio stream" -i -E "CAudioStream|BASS_Init|BASS_StreamCreate"
-          } > hasil/pencarian4.txt
+            g "TryLoadModel" -E "TryLoadModel"
+            g "Last rendered object" -i -E "Last rendered|LastRendered|g_Last"
+            g "Pratinjau model textdraw" -i -E "PreviewModel|ModelPreview|PREVIEW|byteModel"
+            g "Render objek dan hook gambar" -i -E "Render_hook|RenderObject|CObject__Render"
+          } > hasil/pencarian5.txt
 
-          cp_small() { for f in "$@"; do [ -f "$f" ] && [ "$(stat -c%s "$f")" -lt 153600 ] && cp --parents "$f" hasil/file/; done; }
           cp_big() { for f in "$@"; do [ -f "$f" ] && [ "$(stat -c%s "$f")" -lt 614400 ] && cp --parents "$f" hasil/file/; done; }
 
-          cp_big $S/main.cpp $S/main.h $S/audiostream.cpp $S/audiostream.h
-          cp_small $(find $S/gui -type f \( -name "*.cpp" -o -name "*.h" \) -not -path "*/vendor/*" | grep -i -E "keyboard|button|chat|touch|imgui|renderer|gui\.|widget|input|dialog|textdraw|spawn|class|layout|label")
-          cp_small $(grep -rIl -i "SelectTextDraw" $S | grep -v /vendor/)
-          cp_small $(grep -rIl -i -E "TouchEvent|ProcessTouch|CTouchInterface" $S | grep -v /vendor/)
-          cp_small $(find $J/com/samp/mobile/game -type f -name "*.java" | grep -i -E "keyboard|input|edit|chat|dialog|attach|height")
-          cp_small $(find app/src/main/res/layout -type f \( -iname "*keyboard*" -o -iname "*input*" -o -iname "*chat*" -o -iname "*edit*" \))
-          cp_small $(find app/src/main/res -type f -name "*.xml" \( -path "*drawable*" -o -path "*values*" \) \( -iname "*keyboard*" -o -iname "*chat*" -o -iname "*input*" -o -iname "*pink*" \))
+          cp_big $(grep -rIl "TryLoadModel" $S | grep -v /vendor/)
+          cp_big $(find $S -type f \( -iname "textdraw*" -o -iname "streaming*" -o -iname "*preview*" \) -not -path "*/vendor/*")
+          cp_big $S/game/hooks.cpp $S/game/game.cpp $S/game/vehicle.cpp
           du -sh hasil
           find hasil/file -type f | wc -l
 
       - uses: actions/upload-artifact@v4
         with:
-          name: hasil-analisis-4
+          name: hasil-analisis-5
           path: hasil/
