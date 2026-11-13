@@ -92,6 +92,34 @@ seg = seg.replace('AND_TouchEvent(1, 0, 0, 0)', 'AND_TouchEvent(1, num, 0, 0)')
 wr(p, s[:a] + seg + s[b:])
 print('OK  sentuhan textdraw dan analog')
 
+# ------------------------------------------------------------------ 3c. Catatan diagnosa mode pilih textdraw (siapa yang menyalakan/mematikan)
+p = S + '/net/scriptrpc.cpp'
+s = rd(p)
+s = patch(s, r'pNetGame->GetTextDrawPool\(\)->SetSelectState\(bEnable \? true : false, dwColor\);',
+          'FLog("ScrSelectTextDraw: enable=%d warna=0x%x", bEnable ? 1 : 0, dwColor);\n'
+          '\tpNetGame->GetTextDrawPool()->SetSelectState(bEnable ? true : false, dwColor);',
+          'log select rpc')
+s = patch(s, r'void ScrPlayAudioStream\(RPCParameters\* rpcParams\)\s*\{',
+          'void ScrPlayAudioStream(RPCParameters* rpcParams)\n{\n\tFLog("RPC PlayAudioStream diterima dari server");',
+          'log audio rpc')
+wr(p, s)
+p = S + '/net/textdrawpool.cpp'
+s = rd(p)
+s = patch(s, r'pGame->DisplayHUD\(true\);', 'pGame->DisplayHUD(true);\n        FLog("SelectTextDraw: nonaktif");', 'log select off')
+wr(p, s)
+print('OK  catatan diagnosa textdraw dan audio')
+
+# ------------------------------------------------------------------ 3d. Info debug di library native (supaya crash bisa dibaca sampai nama fungsi)
+p = 'app/build.gradle'
+with open(p, encoding='utf-8', newline='') as f:
+    s = f.read()
+pat = r"(ndk \{\s*abiFilters 'armeabi-v7a', 'arm64-v8a'\s*\})"
+assert len(re.findall(pat, s)) == 1, 'PATCH GAGAL [gradle ndk]'
+s = re.sub(pat, lambda m: m.group(1) + '\n\n        externalNativeBuild {\n            cmake {\n                cFlags "-g"\n                cppFlags "-g"\n            }\n        }', s)
+with open(p, 'w', encoding='utf-8', newline='') as f:
+    f.write(s)
+print('OK  info debug native')
+
 # ------------------------------------------------------------------ 4. Renderer: kotak membulat + tombol kaca
 p = S + '/gui/imguirenderer.h'
 s = rd(p)
