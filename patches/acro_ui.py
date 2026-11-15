@@ -120,6 +120,46 @@ with open(p, 'w', encoding='utf-8', newline='') as f:
     f.write(s)
 print('OK  info debug native')
 
+# ------------------------------------------------------------------ 3e. Pratinjau model textdraw: hemat memori dan aman di HP RAM kecil
+p = S + '/game/snapshothelper.cpp'
+s = rd(p)
+# tekstur jangan dibuat dari raster kosong (crash di dalam library game)
+s = patch(s, r'RwTexture\* bufferTexture = RwTextureCreate\(raster\);',
+          'RwTexture* bufferTexture = raster ? RwTextureCreate(raster) : nullptr;', 'snapshot raster', count=3)
+# model kendaraan/objek yang selesai dipakai pratinjau dilepas dari memori (sebelumnya tertahan terus)
+s = patch(s, r'delete pVehicle;\s*return bufferTexture;',
+          'delete pVehicle;\n        CStreaming::RemoveModelIfNoRefs(iModel); // fix: lepas model pratinjau dari memori\n        return bufferTexture;',
+          'snapshot kendaraan')
+s = patch(s, r'(DestroyAtomicOrClump\(reinterpret_cast<uintptr_t>\(pRwObject\)\);)\s*return bufferTexture;',
+          'DestroyAtomicOrClump(reinterpret_cast<uintptr_t>(pRwObject));\n    CStreaming::RemoveModelIfNoRefs(iModel); // fix: lepas model pratinjau dari memori\n    return bufferTexture;',
+          'snapshot objek')
+# kalau kamera/lampu pratinjau gagal dibuat, jangan lanjut
+s = patch(s, r'(RwTexture\* CSnapShotHelper::CreateObjectSnapShot\([^)]*\)\s*\{)', 
+          'RwTexture* CSnapShotHelper::CreateObjectSnapShot(int iModel, uint32_t dwColor, CVector* vecRot, float fZoom)\n{\n    if (!m_camera || !m_light) return nullptr;',
+          'guard objek')
+s = patch(s, r'(RwTexture\* CSnapShotHelper::CreatePedSnapShot\([^)]*\)\s*\{)',
+          'RwTexture* CSnapShotHelper::CreatePedSnapShot(int iModel, uint32_t dwColor, CVector* vecRot, float fZoom)\n{\n    if (!m_camera || !m_light) return nullptr;',
+          'guard ped')
+wr(p, s)
+print('OK  pratinjau model hemat memori')
+
+# ------------------------------------------------------------------ 3f. Catatan diagnosa lampu kendaraan (untuk ELM)
+p = S + '/game/vehicle.cpp'
+s = rd(p)
+s = patch(s, r'(void CVehicle::UpdateDamageStatus\(uint32_t dwPanelDamage, uint32_t dwDoorDamage, uint8_t byteLightDamage\)\s*\{)',
+          'void CVehicle::UpdateDamageStatus(uint32_t dwPanelDamage, uint32_t dwDoorDamage, uint8_t byteLightDamage)\n{\n'
+          '\t{ static int s_n = 0; if (s_n < 300) { s_n++; FLog("UpdateDamageStatus: panel=%u pintu=%u lampu=%d", dwPanelDamage, dwDoorDamage, (int)byteLightDamage); } }',
+          'log damage')
+wr(p, s)
+p = S + '/net/netrpc.cpp'
+s = rd(p)
+s = patch(s, r'pVehicle->ApplyLightState\(vehParamsEx\.byteLight\);',
+          '{ static int s_n = 0; if (s_n < 300) { s_n++; FLog("VehicleParamsEx: mesin=%d lampu=%d", (int)vehParamsEx.byteEngine, (int)vehParamsEx.byteLight); } }\n'
+          '\t\tpVehicle->ApplyLightState(vehParamsEx.byteLight);',
+          'log paramsex')
+wr(p, s)
+print('OK  catatan diagnosa lampu')
+
 # ------------------------------------------------------------------ 4. Renderer: kotak membulat + tombol kaca
 p = S + '/gui/imguirenderer.h'
 s = rd(p)
