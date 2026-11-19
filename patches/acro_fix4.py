@@ -309,11 +309,19 @@ private:
 };
 
 bool bNeedEnterVehicle = false;'''
-s = patch(s, r'bool bNeedEnterVehicle = false;', ICON, 'icon class')
-s = patch(s, r'CButton\* m_bG = new CButton\("G", UISettings::fontSize\(\) / 2\);',
-          'CButton* m_bG = new IconCButton(UISettings::fontSize() / 2, 0); // ikon penumpang (dulu teks G)', 'G icon')
+G_PAT = r'CButton\*\s*m_bG\s*=\s*new\s+CButton\(\s*"G"\s*,[^;]*\);'
+if len(re.findall(G_PAT, s)) == 1 and len(re.findall(r'bool bNeedEnterVehicle = false;', s)) == 1:
+    s = patch(s, r'bool bNeedEnterVehicle = false;', ICON, 'icon class')
+    s = patch(s, G_PAT,
+              'CButton* m_bG = new IconCButton(UISettings::fontSize() / 2, 0); // ikon penumpang (dulu teks G)', 'G icon')
+else:
+    # tidak fatal: ikon G hanya kosmetik, jangan sampai menggagalkan build
+    print('PERINGATAN: tombol G tidak ditemukan persis satu kali, ikon G dilewati. Baris terkait:')
+    for i, line in enumerate(s.splitlines(), 1):
+        if 'm_bG' in line or 'bNeedEnterVehicle' in line:
+            print('   %d: %s' % (i, line.strip()[:140]))
 wr(p, s)
-print('OK  tombol G jadi ikon penumpang')
+print('OK  tombol G (lihat pesan di atas bila dilewati)')
 
 # ------------------------------------------------------------ 8. Diagnosa: id RPC yang pertama kali masuk
 p = S + '/vendor/raknet/RakPeer.cpp'
