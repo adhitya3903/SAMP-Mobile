@@ -876,6 +876,16 @@ if '#include <set>' not in s:
 wr(p, s)
 print('OK  mod kendaraan (antrean aman + penjaga crash)')
 
+# ------------------------------------------------------------ 1b. AKAR crash mod: variabel output script 32-bit
+# ScriptCommand(..."v") menulis uintptr (8 byte di arm64) ke alamat variabel. AddComponent memakai uint32_t (4 byte)
+# -> stack canary rusak -> __stack_chk_fail -> abort (terbukti dari offset libsamp 0x147e28 / 0x182ea0 = AddComponent).
+p = S + '/game/vehicle.cpp'
+s = rd(p)
+s = patch(s, r'uint32_t dwRet;(\s*ScriptCommand\(&add_car_component)', 'uintptr dwRet = 0;\\1'.replace('\\\\','\\'), 'AddComponent dwRet') if False else \
+    patch_keep(s, r'uint32_t dwRet;(\s*ScriptCommand\(&add_car_component)', lambda m: 'uintptr dwRet = 0;' + m.group(1), 'AddComponent dwRet')
+wr(p, s)
+print('OK  AddComponent: variabel output 8 byte')
+
 # ------------------------------------------------------------ 2. Senjata: tangan kosong
 p = S + '/game/Entity/CPedGTA.cpp'
 s = rd(p)
