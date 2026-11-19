@@ -205,6 +205,9 @@ jobs:
       - name: Patch tahap 5 (audio stream, input chat bisa diklik, hapus RUS)
         run: python3 patches/acro_fix2.py
 
+      - name: Patch tahap 6 (analog disembunyikan saat pilih karakter, ikon clipboard, tutup keyboard, AFK)
+        run: python3 patches/acro_fix3.py
+
       - uses: actions/cache@v4
         with:
           path: ~/.gradle/wrapper/dists
