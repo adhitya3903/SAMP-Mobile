@@ -202,6 +202,9 @@ jobs:
       - name: Patch UI tahap 4 (musik, /q, sentuhan textdraw, tombol kaca, keyboard)
         run: python3 patches/acro_ui.py
 
+      - name: Patch tahap 5 (audio stream, input chat bisa diklik, hapus RUS)
+        run: python3 patches/acro_fix2.py
+
       - uses: actions/cache@v4
         with:
           path: ~/.gradle/wrapper/dists
