@@ -199,17 +199,8 @@ jobs:
           PY
           grep -n "acro_\|ffffd400\|ff111111" app/src/main/res/layout/dialog.xml
 
-      - name: Patch UI tahap 4 (musik, /q, sentuhan textdraw, tombol kaca, keyboard)
-        run: python3 patches/acro_ui.py
-
-      - name: Patch tahap 5 (audio stream, input chat bisa diklik, hapus RUS)
-        run: python3 patches/acro_fix2.py
-
-      - name: Patch tahap 6 (analog disembunyikan saat pilih karakter, ikon clipboard, tutup keyboard, AFK)
-        run: python3 patches/acro_fix3.py
-
-      - name: Patch tahap 7 (mod kendaraan, senjata, anti-AFK palsu, pilih karakter, penumpang, ikon G)
-        run: python3 patches/acro_fix4.py
+      - name: Patch Acropolize (satu file untuk semua perbaikan)
+        run: python3 patches/acro_fix.py
 
       - uses: actions/cache@v4
         with:
