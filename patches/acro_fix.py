@@ -1161,3 +1161,84 @@ wr(p, s)
 print('OK  log id RPC')
 print('SEMUA PATCH TAHAP 7 BERHASIL')
 
+# ------------------------------------------------------------ 9. Desync: sirine, NOS, senjata, kendaraan telat tampil
+# 9a. CVehicle::SirenEnabled() kondisinya TERBALIK (if(!m_pVehicle) return m_pVehicle->...): selalu false
+#     -> sirine Android tidak pernah terkirim ke pemain lain.
+p = S + '/game/vehicle.cpp'
+s = rd(p)
+s = patch(s, r'bool CVehicle::SirenEnabled\(\)\s*\{\s*if\(!m_pVehicle\)\s*return m_pVehicle->m_nVehicleFlags\.bSirenOrAlarm;\s*return false;\s*\}',
+          'bool CVehicle::SirenEnabled()\n{\n\tif(m_pVehicle)\n\t\treturn m_pVehicle->m_nVehicleFlags.bSirenOrAlarm;\n\n\treturn false;\n}', 'SirenEnabled')
+wr(p, s)
+
+# 9b. Hook pad NOS / lihat kiri / lihat kanan: tidak ada return di jalur pemain remote (nilai sampah) dan
+#     lihat kiri/kanan salah memakai tombol FIRE (menimpa tombol tembak/NOS lokal) -> NOS salah muncul / desync.
+p = S + '/game/pad.cpp'
+s = rd(p)
+def pad_hook(name, getter, key_remote, key_local):
+    global s
+    pat = (r'(%s\s*\(uintptr_t thiz\)\s*\{)\s*if\(CWorld::PlayerInFocus\)\s*\{.*?\n\s*\}\s*else\s*\{.*?\n\s*\}\s*\}'
+           % re.escape(name))
+    new = (r'\1' + '\n    if(CWorld::PlayerInFocus)\n        return RemotePlayerKeys[byteCurPlayer].bKeys[ePadKeys::%s] ? 1 : 0;\n'
+           '    LocalPlayerKeys.bKeys[ePadKeys::%s] = %s(thiz);\n    return LocalPlayerKeys.bKeys[ePadKeys::%s];\n}') % (key_remote, key_local, getter, key_local)
+    s = patch_keep(s, pat, lambda m, n=new: m.expand(n), 'pad ' + name)
+pad_hook('int CPad__GetNitroFired_hook', 'CPad__GetNitroFired', 'KEY_FIRE', 'KEY_FIRE')
+pad_hook('uint32_t CPad__GetLookLeft_hook', 'CPad__GetLookLeft', 'KEY_LOOK_LEFT', 'KEY_LOOK_LEFT')
+pad_hook('uint32_t CPad__GetLookRight_hook', 'CPad__GetLookRight', 'KEY_LOOK_RIGHT', 'KEY_LOOK_RIGHT')
+wr(p, s)
+
+# 9c. Senjata remote "mengisi peluru terus": status RELOADING di-set ulang tiap paket aim sync sehingga reload tak pernah selesai
+p = S + '/net/remoteplayer.cpp'
+s = rd(p)
+s = patch(s, r'if \(paimSync->byteWeaponState == WEAPONSTATE_RELOADING\)\s*pwstWeapon->dwState = \(eWeaponState\)2;\s*// Reloading',
+          'if (paimSync->byteWeaponState == WEAPONSTATE_RELOADING)\n\t{\n\t\tif (pwstWeapon->dwState != 2) pwstWeapon->dwState = (eWeaponState)2;\t// Reloading (sekali saja, jangan diulang tiap paket)\n\t}', 'reload loop')
+wr(p, s)
+
+# 9d. Kendaraan baru kadang tidak terlihat/tembus sampai pemain pindah interior: pasang ulang ke dunia (Remove+Add)
+#     tak lama setelah dibuat dan sekali lagi beberapa detik kemudian (hanya bila kosong).
+p = S + '/net/vehiclepool.h'
+s = rd(p)
+s = patch(s, r'void ProcessPendingMods\(uint32_t dwTick\);', 'void ProcessPendingMods(uint32_t dwTick);\n\tuint32_t m_dwRefreshTick[MAX_VEHICLES];\n\tuint8_t  m_byteRefreshStage[MAX_VEHICLES];', 'pool.h refresh')
+wr(p, s)
+p = S + '/net/vehiclepool.cpp'
+s = rd(p)
+s = patch_keep(s, r'(    // fix: mod \(velg, NOS, dll\), paintjob dan warna body diantre, dipasang aman oleh ProcessPendingMods\n)',
+               lambda m: m.group(1) + '    m_dwRefreshTick[new_veh->VehicleID] = GetTickCount() + 700;\n    m_byteRefreshStage[new_veh->VehicleID] = 0;\n', 'refresh init')
+s = patch_keep(s, r'(    int budget = 1;\n)',
+          lambda m: m.group(1) + '''    for (VEHICLEID rid = 0; rid < MAX_VEHICLES; rid++)
+    {
+        if (!m_dwRefreshTick[rid] || dwTick < m_dwRefreshTick[rid]) continue;
+        CVehicle* rv = m_pVehicles[rid];
+        if (!rv || !m_bVehicleSlotState[rid] || !rv->m_pVehicle || !GamePool_Vehicle_GetAt(rv->m_dwGTAId)) { m_dwRefreshTick[rid] = 0; continue; }
+        if (pGame->GetActiveInterior() != m_pendingMod[rid].interior) { m_dwRefreshTick[rid] = dwTick + 1000; continue; }
+        if (!rv->m_pVehicle->m_pRwObject) { m_dwRefreshTick[rid] = dwTick + 500; continue; }
+        if (!rv->IsOccupied()) { rv->m_pVehicle->Remove(); rv->m_pVehicle->Add(); }
+        if (++m_byteRefreshStage[rid] >= 2) m_dwRefreshTick[rid] = 0; else m_dwRefreshTick[rid] = dwTick + 2500;
+    }
+''', 'refresh loop')
+wr(p, s)
+
+# 9e. Diagnosa: catat tiap RPC yang tidak terdaftar atau id 57 (mod kendaraan) setiap kali masuk (maks 60x)
+p = S + '/vendor/raknet/RakPeer.cpp'
+s = rd(p)
+s = patch_keep(s, r'(\t\tstatic bool s_seenRpc\[256\];\n)',
+          lambda m: m.group(1) + '''		static int s_rpcCount;
+		{
+			unsigned int idChk = (unsigned int)((uintptr_t)uniqueIdentifier & 0xFF);
+			if ((rpcIndex == UNDEFINED_RPC_INDEX || idChk == 57) && s_rpcCount < 60)
+			{
+				s_rpcCount++;
+				extern void FLog(const char* fmt, ...);
+				FLog("RPC masuk id=%u terdaftar=%d (kemungkinan mod kendaraan runtime)", idChk, rpcIndex != UNDEFINED_RPC_INDEX ? 1 : 0);
+			}
+		}
+''', 'rpc diag 2')
+wr(p, s)
+print('OK  desync: sirine, NOS, reload, kendaraan telat tampil, diagnosa RPC')
+
+# 9f. Inisialisasi array antrean mod/refresh di konstruktor pool (kalau tidak, isi sampah -> proses acak)
+p = S + '/net/vehiclepool.cpp'
+s = rd(p)
+s = patch_keep(s, r'(CVehiclePool::CVehiclePool\(\)\s*\{\s*for \(int i = 0; i < MAX_VEHICLES; i\+\+\)\s*\{\s*m_pVehicles\[i\] = nullptr;)',
+               lambda m: m.group(1) + '\n        memset(&m_pendingMod[i], 0, sizeof(m_pendingMod[i]));\n        m_dwRefreshTick[i] = 0;\n        m_byteRefreshStage[i] = 0;', 'pool ctor init')
+wr(p, s)
+print('OK  init array pool')
