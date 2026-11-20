@@ -230,7 +230,16 @@ jobs:
       - name: Build debug APK
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --console=plain
+          # Maven Central kadang membalas 429 (terlalu banyak permintaan) dari server GitHub; coba ulang beberapa kali.
+          # Hasil unduhan yang berhasil tersimpan di ~/.gradle, jadi tiap percobaan makin sedikit yang perlu diunduh.
+          ok=0
+          for i in 1 2 3 4 5; do
+            echo "=== Percobaan build $i ==="
+            if ./gradlew assembleDebug --no-daemon --console=plain; then ok=1; break; fi
+            echo "Build gagal, tunggu sebelum mencoba lagi..."
+            sleep $((i * 45))
+          done
+          [ "$ok" = 1 ] || { echo "Build gagal setelah 5 percobaan"; exit 1; }
 
       - name: Terjemahkan offset crash ke nama fungsi
         continue-on-error: true
