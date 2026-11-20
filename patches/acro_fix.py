@@ -1270,3 +1270,134 @@ s = patch(s, r'pNetGame->GetTextDrawPool\(\)->SetSelectState\(bEnable \? true : 
           'pNetGame->GetTextDrawPool()->SetSelectState(bEnable ? true : false, dwColor, false); // dari server: jangan balas ESC', 'select rpc')
 wr(p, s)
 print('OK  Spawn: batal dari server tidak lagi membalas ESC / membuka kunci')
+
+
+# ------------------------------------------------------------ 11. Tombol panel tersembunyi masih menerima sentuhan + tombol penumpang baru
+# 11a. Saat layar pilih karakter/spawn, tombol panel (TAB, ESC, ...) walau tidak terlihat masih menangkap sentuhan,
+#      sehingga menimpa nama karakter / tombol Spawn yang berada di area yang sama. Sekarang UI diabaikan di layar itu.
+p = S + '/game/hooks.cpp'
+s = rd(p)
+s = patch_keep(s, r'(\tif \(\(int\)locked != s_last\)\s*\{.*?\n\t\}\n\treturn locked;\n\}\n)',
+               lambda m: m.group(1) + '''
+// true = layar pilih karakter / spawn / SelectTextDraw: UI panel tidak boleh menerima sentuhan
+bool AcroSelectScreenActive()
+{
+	if (!pNetGame || pNetGame->GetGameState() != GAMESTATE_CONNECTED) return false;
+	CTextDrawPool* pTD = pNetGame->GetTextDrawPool();
+	CPlayerPool* pPP = pNetGame->GetPlayerPool();
+	if (pTD && pTD->GetState()) return true;
+	if (pTD && pPP && pPP->GetLocalPlayer() && !pPP->GetLocalPlayer()->IsSpawnedForInput() && pTD->HasAnyTextDraw()) return true;
+	return false;
+}
+''', 'AcroSelectScreenActive')
+wr(p, s)
+
+p = S + '/gui/gui.cpp'
+s = rd(p)
+s = patch_keep(s, r'(\tWidget::touchEvent\(pos, type\);\n\}\n\nenum eTouchType)',
+               lambda m: '\t{ extern bool AcroSelectScreenActive(); if (AcroSelectScreenActive()) return; }\n' + m.group(1), 'gui touch block')
+s = patch_keep(s, r'(\tm_voiceButton = new VoiceButton\(\);)',
+               lambda m: '\t{ extern Widget* CreatePassengerButton(); this->addChild(CreatePassengerButton()); }\n' + m.group(1), 'gui add passenger')
+wr(p, s)
+
+# 11b. Tombol penumpang: dihapus dari deretan >> dan dipindah jadi tombol sentuh di samping tombol "naik pengemudi"
+p = S + '/gui/samp_widgets/buttonpanel.cpp'
+s = rd(p)
+s = patch_keep(s, r'(\tthis->addChild\(m_bG\);)', lambda m: '\t// tombol penumpang dipindah ke samping tombol naik kendaraan (PassengerButton)', 'panel remove G')
+s = patch_keep(s, r'(bool bNeedEnterVehicle = false;)',
+               lambda m: '''bool AcroSelectScreenActive();
+extern CGame* pGame;
+
+/* Tombol sentuh "naik sebagai penumpang": muncul di sebelah kiri tombol naik pengemudi bila ada kendaraan dekat */
+class PassengerButton : public Widget
+{
+public:
+	PassengerButton()
+	{
+		ImVec2 d = ImGui::GetIO().DisplaySize;
+		float r = d.y * 0.066f;
+		setFixedSize(ImVec2(r * 2.0f, r * 2.0f));
+		setPosition(ImVec2(d.x * 0.880f - r, d.y * 0.546f - r));
+		m_cacheTick = 0; m_cacheShow = false;
+	}
+
+	bool shouldShow()
+	{
+		if (!pNetGame || pNetGame->GetGameState() != GAMESTATE_CONNECTED) return false;
+		if (AcroSelectScreenActive()) return false;
+		if (pUI && (pUI->keyboard()->visible() || pUI->dialog()->visible() || pUI->playertablist()->visible())) return false;
+		CPlayerPool* pp = pNetGame->GetPlayerPool();
+		if (!pp || !pp->GetLocalPlayer() || !pp->GetLocalPlayer()->IsSpawnedForInput()) return false;
+		CPlayerPed* ped = pGame ? pGame->FindPlayerPed() : nullptr;
+		if (!ped || !ped->m_pPed || ped->IsInVehicle()) return false;
+
+		uint32_t now = GetTickCount();
+		if (now - m_cacheTick > 200)
+		{
+			m_cacheTick = now;
+			m_cacheShow = false;
+			CVehiclePool* vp = pNetGame->GetVehiclePool();
+			if (vp)
+			{
+				CVehicle* v = vp->GetAt(vp->FindNearestToLocalPlayerPed());
+				if (v && v->m_pVehicle && v->m_pVehicle->GetDistanceFromLocalPlayerPed() < 8.0f) m_cacheShow = true;
+			}
+		}
+		return m_cacheShow;
+	}
+
+	virtual void draw(ImGuiRenderer* renderer) override
+	{
+		if (!shouldShow()) return;
+		ImVec2 a = absolutePosition();
+		ImVec2 sz = size();
+		renderer->drawGlassButton(a, ImVec2(a.x + sz.x, a.y + sz.y), UISettings::buttonColor(), focused());
+
+		ImColor ic = focused() ? ImColor(0.07f, 0.07f, 0.07f) : ImColor(1.0f, 1.0f, 1.0f);
+		float s = (sz.x < sz.y ? sz.x : sz.y) * 0.34f;
+		float cx = a.x + sz.x * 0.5f;
+		float cy = a.y + sz.y * 0.5f;
+		// siluet kursi dengan orang duduk (penumpang)
+		float hr = s * 0.20f;
+		renderer->drawRoundedRect(ImVec2(cx - hr, cy - s * 0.66f), ImVec2(cx + hr, cy - s * 0.26f), ic, hr, true);
+		renderer->drawRoundedRect(ImVec2(cx - s * 0.36f, cy - s * 0.16f), ImVec2(cx + s * 0.36f, cy + s * 0.40f), ic, s * 0.16f, true);
+		renderer->drawLine(ImVec2(cx - s * 0.64f, cy + s * 0.64f), ImVec2(cx + s * 0.64f, cy + s * 0.64f), ic, 3.0f);
+		renderer->drawLine(ImVec2(cx - s * 0.64f, cy - s * 0.34f), ImVec2(cx - s * 0.64f, cy + s * 0.64f), ic, 3.0f);
+	}
+
+	virtual void touchEvent(const ImVec2& pos, TouchType type) override
+	{
+		if (!shouldShow()) return;
+		Widget::touchEvent(pos, type);
+	}
+
+	virtual void touchPopEvent() override { bNeedEnterVehicle = true; }
+
+private:
+	uint32_t m_cacheTick;
+	bool m_cacheShow;
+};
+
+Widget* CreatePassengerButton() { return new PassengerButton(); }
+
+bool bNeedEnterVehicle = false;''', 'panel passenger class')
+wr(p, s)
+
+# 11c. Diagnosa kendaraan "ghaib": catat bila objek kendaraan hilang dari pool game padahal masih aktif di server
+p = S + '/net/vehiclepool.cpp'
+s = rd(p)
+s = patch_keep(s, r'(    int budget = 1;\n)',
+               lambda m: m.group(1) + '''    {
+        static bool s_gone[MAX_VEHICLES];
+        for (VEHICLEID gid = 0; gid < MAX_VEHICLES; gid++)
+        {
+            CVehicle* gv = m_pVehicles[gid];
+            bool active = gv && m_bVehicleSlotState[gid] && gv->m_pVehicle;
+            bool gone = active && !GamePool_Vehicle_GetAt(gv->m_dwGTAId);
+            if (gone && !s_gone[gid]) FLog("Kendaraan %d hilang dari pool game padahal masih aktif (desync 'ghaib')", (int)gid);
+            s_gone[gid] = gone;
+        }
+    }
+''', 'ghost diag')
+wr(p, s)
+print('OK  tombol panel tak menerima sentuhan di layar spawn, tombol penumpang baru, diagnosa kendaraan ghaib')
