@@ -1242,3 +1242,31 @@ s = patch_keep(s, r'(CVehiclePool::CVehiclePool\(\)\s*\{\s*for \(int i = 0; i < 
                lambda m: m.group(1) + '\n        memset(&m_pendingMod[i], 0, sizeof(m_pendingMod[i]));\n        m_dwRefreshTick[i] = 0;\n        m_byteRefreshStage[i] = 0;', 'pool ctor init')
 wr(p, s)
 print('OK  init array pool')
+
+
+# ------------------------------------------------------------ 10. Spawn/pilih karakter tidak bisa disentuh (server roleplay)
+# Akar masalah (dari log): SetSelectState(false) SELALU mengirim ClickTextDraw(0xFFFF) ke server = "pemain menekan ESC".
+# Saat server memanggil CancelSelectTextDraw, client membalas "ESC", lalu skrip roleplay merespons (pilih ulang / batal lagi)
+# -> perulangan enable=0/enable=1 ratusan kali; di sela-selanya mode pilih mati sehingga sentuhan Spawn hilang,
+# dan tiap batal juga membuka kunci pemain yang dibekukan server. SA-MP asli hanya mengirim klik saat pemain menekan ESC.
+p = S + '/net/textdrawpool.h'
+s = rd(p)
+s = patch(s, r'void SetSelectState\(bool bState, uint32_t dwColor = 0\);',
+          'void SetSelectState(bool bState, uint32_t dwColor = 0, bool bNotifyServer = true);', 'select h')
+wr(p, s)
+
+p = S + '/net/textdrawpool.cpp'
+s = rd(p)
+s = patch(s, r'void CTextDrawPool::SetSelectState\(bool bState, uint32_t dwColor\)\s*\{',
+          'extern bool g_bAcroServerFrozen;\n\nvoid CTextDrawPool::SetSelectState(bool bState, uint32_t dwColor, bool bNotifyServer)\n{', 'select cpp sig')
+s = patch(s, r'pGame->DisplayHUD\(true\);\s*FLog\("SelectTextDraw: nonaktif"\);\s*pGame->FindPlayerPed\(\)->TogglePlayerControllable\(true\);\s*SendClick\(\);',
+          'pGame->DisplayHUD(true);\n        FLog("SelectTextDraw: nonaktif (dari %s)", bNotifyServer ? "pemain" : "server");\n        if (!g_bAcroServerFrozen) pGame->FindPlayerPed()->TogglePlayerControllable(true);\n\n        // hanya kirim "ESC" bila pemain yang menutup (tombol ESC), bukan saat server yang membatalkan\n        if (bNotifyServer) SendClick();',
+          'select cpp body')
+wr(p, s)
+
+p = S + '/net/scriptrpc.cpp'
+s = rd(p)
+s = patch(s, r'pNetGame->GetTextDrawPool\(\)->SetSelectState\(bEnable \? true : false, dwColor\);',
+          'pNetGame->GetTextDrawPool()->SetSelectState(bEnable ? true : false, dwColor, false); // dari server: jangan balas ESC', 'select rpc')
+wr(p, s)
+print('OK  Spawn: batal dari server tidak lagi membalas ESC / membuka kunci')
