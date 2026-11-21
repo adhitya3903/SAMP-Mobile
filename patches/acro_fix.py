@@ -1402,3 +1402,79 @@ s = patch_keep(s, r'(    int budget = 1;\n)',
 ''', 'ghost diag')
 wr(p, s)
 print('OK  tombol panel tak menerima sentuhan di layar spawn, tombol penumpang baru, diagnosa kendaraan ghaib')
+
+
+# ======================================================================== BAGIAN 12 (perbaikan 21 Nov)
+# 12a. Tombol panel (<< TAB ESC ALT H Y N F 2) tidak boleh menerima sentuhan saat panel ditutup,
+#      dan tombol ">>" tidak menerima sentuhan saat panel terbuka (dulu hanya "tidak digambar", sentuhan tetap masuk)
+p = S + '/gui/widgets/button.h'
+s = rd(p)
+s = patch_keep(s, r'(class (?:CButton|OButton) : public Widget\n\{.*?\tvirtual void touchPopEvent\(\) override;\n)',
+               lambda m: m.group(1) + '\tvirtual void touchEvent(const ImVec2& pos, TouchType type) override;\n',
+               'button.h touchEvent', count=2)
+wr(p, s)
+p = S + '/gui/widgets/button.cpp'
+s = rd(p)
+s += """
+
+// fix: panel tertutup -> tombol di dalamnya tidak boleh bisa dipencet (walau tidak tergambar)
+void CButton::touchEvent(const ImVec2& pos, TouchType type)
+{
+	if (OpenButton == false) return;
+	Widget::touchEvent(pos, type);
+}
+
+// fix: panel terbuka -> tombol ">>" sudah pindah keluar layar, jangan terima sentuhan
+void OButton::touchEvent(const ImVec2& pos, TouchType type)
+{
+	if (OpenButton == true) return;
+	Widget::touchEvent(pos, type);
+}
+"""
+wr(p, s)
+
+# 12b. Kunci kontrol "belum spawn" hanya saat layar pilih-karakter (dialog Spawn << >>) benar-benar tampil.
+#      Dulu: tidak spawn + ada textdraw apa pun -> terkunci selamanya (login selesai tapi tidak bisa menyentuh apa pun).
+p = S + '/game/hooks.cpp'
+s = rd(p)
+s = patch(s, r'else if \(pTD && pPP && pPP->GetLocalPlayer\(\) &&\s*!pPP->GetLocalPlayer\(\)->IsSpawnedForInput\(\) && pTD->HasAnyTextDraw\(\)\) \{ locked = true; why = "belum spawn"; \}',
+          'else if (pPP && pPP->GetLocalPlayer() && !pPP->GetLocalPlayer()->IsSpawnedForInput() &&\n'
+          '\t\t\t\t pUI && pUI->spawn() && pUI->spawn()->visible()) { locked = true; why = "layar pilih karakter"; }',
+          'lock belum spawn')
+s = patch(s, r'if \(pTD && pPP && pPP->GetLocalPlayer\(\) && !pPP->GetLocalPlayer\(\)->IsSpawnedForInput\(\) && pTD->HasAnyTextDraw\(\)\) return true;',
+          'if (pPP && pPP->GetLocalPlayer() && !pPP->GetLocalPlayer()->IsSpawnedForInput() &&\n'
+          '\t\tpUI && pUI->spawn() && pUI->spawn()->visible()) return true;',
+          'select screen active')
+wr(p, s)
+
+# 12c. Widget bawaan GTA (naik mobil, lari, gas, rem): sinkronkan status enable.
+#      Dulu kita memaksa SetEnabled(false) lalu berhenti, sehingga saat kondisi normal kembali widget tetap
+#      "mati" (tidak tergambar) tapi Update jalan lagi -> tombol tak terlihat namun bisa dipencet, atau sebaliknya.
+p = S + '/game/Widgets/WidgetGta.cpp'
+s = rd(p)
+s = patch(s, r'struct AcroWidgetEntry \{ CWidgetGta\* w; char name\[24\]; \};',
+          'struct AcroWidgetEntry { CWidgetGta* w; char name[24]; bool intended; bool forced; };', 'entry struct')
+s = patch(s, r'(    g_acroWidgets\[g_acroWidgetCount\]\.w = w;\n)',
+          '    g_acroWidgets[g_acroWidgetCount].w = w;\n    g_acroWidgets[g_acroWidgetCount].intended = false;\n    g_acroWidgets[g_acroWidgetCount].forced = false;\n',
+          'entry init')
+s = patch(s, r'(static bool AcroShouldHideWidget\(CWidgetGta\* w\))',
+          'static AcroWidgetEntry* AcroFindWidget(CWidgetGta* w)\n{\n    for (int i = 0; i < g_acroWidgetCount; i++)\n        if (g_acroWidgets[i].w == w) return &g_acroWidgets[i];\n    return nullptr;\n}\n\n'
+          'static bool AcroShouldHideWidget(CWidgetGta* w)', 'find helper')
+s = patch(s, r'void CWidget__SetEnabled_hook\(CWidgetGta\* pWidget, bool bEnabled\)\n\{\n    if\(pNetGame\)\n    \{\n        switch\(ProcessFixedWidget\(pWidget\)\)\n        \{\n            case STATE_NONE: break;\n            case STATE_FIXED:\n                bEnabled = false;\n                break;\n        \}\n    \}\n',
+          'void CWidget__SetEnabled_hook(CWidgetGta* pWidget, bool bEnabled)\n{\n    AcroWidgetEntry* e = AcroFindWidget(pWidget);\n    if (e) { e->intended = bEnabled; e->forced = false; }\n    if(pNetGame)\n    {\n        switch(ProcessFixedWidget(pWidget))\n        {\n            case STATE_NONE: break;\n            case STATE_FIXED:\n                bEnabled = false;\n                if (e) e->forced = true;\n                break;\n        }\n    }\n',
+          'SetEnabled hook')
+s = patch(s, r'void CWidgetButton__Update_hook\(CWidgetButton\* thiz\) \{\n    if\(pNetGame\)\n    \{\n        switch\(ProcessFixedWidget\(thiz\)\)\n        \{\n            case STATE_NONE: break;\n            case STATE_FIXED: return;\n        \}\n    \}\n',
+          'void CWidgetButton__Update_hook(CWidgetButton* thiz) {\n    if(pNetGame)\n    {\n        AcroWidgetEntry* e = AcroFindWidget(thiz);\n        switch(ProcessFixedWidget(thiz))\n        {\n            case STATE_NONE:\n                if (e && e->forced) { e->forced = false; CWidget__SetEnabled(thiz, e->intended); }\n                break;\n            case STATE_FIXED:\n                if (e) { e->forced = true; CWidget__SetEnabled(thiz, false); }\n                return;\n        }\n    }\n',
+          'Update hook')
+wr(p, s)
+print('OK  panel tak bisa disentuh saat tertutup, kunci spawn hanya di layar pilih karakter, sinkron widget GTA')
+
+# 12d. BUG dari tahap 11: layar pilih karakter memblokir SEMUA sentuhan ke UI, termasuk tombol << Spawn >> milik dialog Spawn
+#      sendiri. Sekarang saat layar itu aktif, hanya dialog Spawn yang boleh menerima sentuhan (panel dll tetap diblokir).
+p = S + '/gui/gui.cpp'
+s = rd(p)
+s = patch(s, r'\{ extern bool AcroSelectScreenActive\(\); if \(AcroSelectScreenActive\(\)\) return; \}',
+          '{ extern bool AcroSelectScreenActive(); if (AcroSelectScreenActive()) { if (m_spawn && m_spawn->visible()) m_spawn->touchEvent(pos, type); return; } }',
+          'spawn dialog tetap menerima sentuhan')
+wr(p, s)
+print('OK  tombol Spawn << >> bisa disentuh lagi')
