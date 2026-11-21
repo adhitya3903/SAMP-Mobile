@@ -202,10 +202,18 @@ jobs:
       - name: Patch Acropolize (satu file untuk semua perbaikan)
         run: python3 patches/acro_fix.py
 
-      - uses: actions/cache@v4
+      # Cache unduhan Gradle (wrapper + pustaka Maven). Dipulihkan di awal, disimpan lagi di akhir
+      # walau build gagal, supaya build berikutnya hampir tidak mengunduh apa pun (anti 429).
+      - name: Pulihkan cache Gradle
+        uses: actions/cache/restore@v4
         with:
-          path: ~/.gradle/wrapper/dists
-          key: gradle-wrapper-dists-8.9
+          path: |
+            ~/.gradle/wrapper/dists
+            ~/.gradle/caches/modules-2
+          key: gradle-cache-${{ runner.os }}-${{ hashFiles('**/*.gradle', '**/gradle-wrapper.properties', '**/libs.versions.toml') }}-${{ github.run_id }}
+          restore-keys: |
+            gradle-cache-${{ runner.os }}-${{ hashFiles('**/*.gradle', '**/gradle-wrapper.properties', '**/libs.versions.toml') }}-
+            gradle-cache-${{ runner.os }}-
 
       - name: Siapkan Gradle (server resmi dulu, lalu mirror cadangan)
         run: |
@@ -240,6 +248,15 @@ jobs:
             sleep $((i * 45))
           done
           [ "$ok" = 1 ] || { echo "Build gagal setelah 5 percobaan"; exit 1; }
+
+      - name: Simpan cache Gradle
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.gradle/wrapper/dists
+            ~/.gradle/caches/modules-2
+          key: gradle-cache-${{ runner.os }}-${{ hashFiles('**/*.gradle', '**/gradle-wrapper.properties', '**/libs.versions.toml') }}-${{ github.run_id }}
 
       - name: Terjemahkan offset crash ke nama fungsi
         continue-on-error: true
