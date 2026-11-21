@@ -1305,8 +1305,8 @@ p = S + '/gui/samp_widgets/buttonpanel.cpp'
 s = rd(p)
 s = patch_keep(s, r'(\tthis->addChild\(m_bG\);)', lambda m: '\t// tombol penumpang dipindah ke samping tombol naik kendaraan (PassengerButton)', 'panel remove G')
 s = patch_keep(s, r'(bool bNeedEnterVehicle = false;)',
-               lambda m: '''extern bool bNeedEnterVehicle;
-bool AcroSelectScreenActive();
+               lambda m: '''bool AcroSelectScreenActive();
+extern bool bNeedEnterVehicle;
 extern CGame* pGame;
 
 /* Tombol sentuh "naik sebagai penumpang": muncul di sebelah kiri tombol naik pengemudi bila ada kendaraan dekat */
