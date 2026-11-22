@@ -1478,3 +1478,106 @@ s = patch(s, r'\{ extern bool AcroSelectScreenActive\(\); if \(AcroSelectScreenA
           'spawn dialog tetap menerima sentuhan')
 wr(p, s)
 print('OK  tombol Spawn << >> bisa disentuh lagi')
+
+# ======================================================================== BAGIAN 13 (22 Nov)
+# 13a. Tekstur "setengah"/kosong + "rled error 3": ukuran sumber RLE diambil dari OS_FileRead TERAKHIR (variabel global,
+#      ditimpa thread lain / sudah di-nol-kan), sehingga dekompresi berhenti di tengah (ikon separo) atau tidak jalan sama
+#      sekali (ikon hilang). Sekarang: variabel per-thread, dan batas sumber hanya saran (dilewati -> lanjut seperti kode asli GTA).
+p = S + '/game/hooks.cpp'
+s = rd(p)
+s = patch(s, r'static uint32_t dwRLEDecompressSourceSize = 0;',
+          'static thread_local uint32_t dwRLEDecompressSourceSize = 0;', 'rle thread_local')
+s = patch(s, r'void RLEDecompress_hook\(uint8_t\* pDest.*?\n\}\n', """void RLEDecompress_hook(uint8_t* pDest, size_t uiDestSize, const uint8_t* pSrc, size_t uiSegSize, uint32_t uiEscape) {
+
+    if (!pDest || !pSrc || uiDestSize == 0 || uiSegSize == 0) return;
+
+    size_t srcLimit = dwRLEDecompressSourceSize; // 0 = tidak diketahui
+    const uint8_t* pTempSrc = pSrc;
+    const uint8_t* const pEndOfDest = pDest + uiDestSize;
+    static int s_loose = 0;
+
+    while (pDest < pEndOfDest) {
+        if (srcLimit && (size_t)(pTempSrc - pSrc) >= srcLimit) {
+            // ukuran sumber yang tercatat lebih kecil dari datanya (catatan basi): lanjut seperti kode asli
+            if (s_loose++ < 5) FLog("RLE: batas sumber %u terlewati, dilanjutkan tanpa batas", (unsigned)srcLimit);
+            srcLimit = 0;
+        }
+        if (*pTempSrc == uiEscape) {
+            uint8_t ucCurSeg = pTempSrc[1];
+            while (ucCurSeg--) {
+                if (pDest + uiSegSize > pEndOfDest) { dwRLEDecompressSourceSize = 0; return; } // jangan menulis di luar buffer tujuan
+                memcpy(pDest, pTempSrc + 2, uiSegSize);
+                pDest += uiSegSize;
+            }
+            pTempSrc += 2 + uiSegSize;
+        } else {
+            size_t n = (size_t)(pEndOfDest - pDest);
+            if (n > uiSegSize) n = uiSegSize;
+            memcpy(pDest, pTempSrc, n);
+            pDest += uiSegSize;
+            pTempSrc += uiSegSize;
+        }
+    }
+
+    dwRLEDecompressSourceSize = 0;
+}
+""", 'rle hook')
+
+# 13c. Pemain dibekukan server (misal checkpoint side job bus) TIDAK boleh mengunci semua tombol:
+#      skrip server sering menunggu tombol (Y/N/ALT/F). Kunci layar hanya untuk SelectTextDraw / layar pilih karakter.
+s = patch(s, r'if \(g_bAcroServerFrozen\) \{ locked = true; why = "server membekukan pemain"; \}\s*else if \(pTD && pTD->GetState\(\)\)',
+          'if (pTD && pTD->GetState())', 'frozen tidak mengunci')
+
+# 13e. Profil frame: tiap 5 detik catat rata-rata ms per frame, ms HUD+textdraw, ms UI (bahan untuk optimasi FPS)
+s = patch(s, r'void Render2dStuff\(\)\n\{\n',
+          '#include <chrono>\nvoid Render2dStuff()\n{\n    auto acroT0 = std::chrono::steady_clock::now();\n', 'profil awal')
+s = patch(s, r'if \(pUI\) pUI->render\(\);\n\}\n\n/\* =+ \*/\n\nint \(\*CRadar__SetCoordBlip\)', """auto acroT1 = std::chrono::steady_clock::now();
+    if (pUI) pUI->render();
+    {
+        auto acroT2 = std::chrono::steady_clock::now();
+        static double sHud = 0, sUi = 0; static int sN = 0;
+        static auto sWin = acroT2;
+        sHud += std::chrono::duration<double, std::milli>(acroT1 - acroT0).count();
+        sUi  += std::chrono::duration<double, std::milli>(acroT2 - acroT1).count();
+        sN++;
+        double win = std::chrono::duration<double, std::milli>(acroT2 - sWin).count();
+        if (win >= 5000.0)
+        {
+            FLog("PROFIL 5dtk: %d frame, %.1f ms/frame (%.0f FPS), HUD+textdraw %.2f ms, UI %.2f ms",
+                 sN, win / sN, sN * 1000.0 / win, sHud / sN, sUi / sN);
+            sHud = sUi = 0; sN = 0; sWin = acroT2;
+        }
+    }
+}
+
+/* =============================================================================== */
+
+int (*CRadar__SetCoordBlip)""", 'profil akhir')
+wr(p, s)
+
+# 13b. Cahaya lampu jalan yang menempel di aspal (static shadow) ikut dimatikan oleh RET lama -> aktifkan lagi.
+p = S + '/game/patches.cpp'
+s = rd(p)
+s = patch(s, r'\tCHook::RET\("_ZN8CShadows19RenderStaticShadowsEb"\);[^\n]*\n',
+          '\t// (dulu dimatikan) CShadows::RenderStaticShadows -> dipakai untuk cahaya lampu jalan di aspal, diaktifkan lagi\n',
+          'static shadows aktif')
+wr(p, s)
+
+# 13d. Tombol penumpang memakai tekstur "PassengerButton" dari mobile.txt bila ada (cadangan: gambar vektor)
+p = S + '/gui/samp_widgets/buttonpanel.cpp'
+s = rd(p)
+s = patch(s, r'm_cacheTick = 0; m_cacheShow = false;',
+          'm_cacheTick = 0; m_cacheShow = false; m_tex = nullptr; m_texTried = false;', 'pb ctor')
+s = patch(s, r'if \(!shouldShow\(\)\) return;\s*ImVec2 a = absolutePosition\(\);', """if (!shouldShow()) return;
+		if (!m_texTried) { m_texTried = true; m_tex = (RwTexture*)CUtil::LoadTextureFromDB("mobile", "PassengerButton"); }
+		if (m_tex && m_tex->raster)
+		{
+			ImVec2 ta = absolutePosition();
+			renderer->drawImage(ta, ta + size(), (ImTextureID)m_tex->raster);
+			return;
+		}
+		ImVec2 a = absolutePosition();""", 'pb draw')
+s = patch(s, r'uint32_t m_cacheTick;\s*bool m_cacheShow;\s*\};',
+          'uint32_t m_cacheTick;\n\tbool m_cacheShow;\n\tRwTexture* m_tex;\n\tbool m_texTried;\n};', 'pb members')
+wr(p, s)
+print('OK  tekstur RLE tidak terpotong, lampu jalan aktif, beku server tidak kunci tombol, tombol penumpang pakai tekstur, profil FPS')
