@@ -1559,7 +1559,7 @@ wr(p, s)
 p = S + '/game/patches.cpp'
 s = rd(p)
 s = patch(s, r'\tCHook::RET\("_ZN8CShadows19RenderStaticShadowsEb"\);[^\n]*\n',
-          '\t// CShadows::RenderStaticShadows = cahaya lampu jalan di aspal; bisa dimatikan lewat settings.ini [gui] StaticShadows=0\n\tif (pSettings && !pSettings->Get().bStaticShadows) CHook::RET("_ZN8CShadows19RenderStaticShadowsEb");\n',
+          '\t// CShadows::RenderStaticShadows = cahaya lampu jalan di aspal; default MATI (FPS); nyalakan lewat settings.ini [gui] StaticShadows=1\n\tif (pSettings && !pSettings->Get().bStaticShadows) CHook::RET("_ZN8CShadows19RenderStaticShadowsEb");\n',
           'static shadows toggle')
 wr(p, s)
 
@@ -1569,7 +1569,7 @@ s = patch_keep(s, r'(\tbool bPassengerUseTexture;)', lambda m: '\tbool bStaticSh
 wr(p, s)
 p = S + '/settings.cpp'
 s = rd(p)
-s = patch_keep(s, r'(\tm_Settings\.bPassengerUseTexture = )', lambda m: '\tm_Settings.bStaticShadows = reader.GetBoolean("gui", "StaticShadows", true);\n' + m.group(1), 'settings.cpp StaticShadows')
+s = patch_keep(s, r'(\tm_Settings\.bPassengerUseTexture = )', lambda m: '\tm_Settings.bStaticShadows = reader.GetBoolean("gui", "StaticShadows", false);\n' + m.group(1), 'settings.cpp StaticShadows')
 wr(p, s)
 
 # 15. Tombol voice digeser ~1% ke kiri (500 -> 493.6 dari lebar basis 640)
@@ -1671,6 +1671,7 @@ s = patch(s, r'#include <chrono>\nvoid Render2dStuff\(\)',
 s = patch(s, r'FLog\("PROFIL 5dtk:.*?sWin = acroT2;',
 """FLog("PROFIL 5dtk: %d frame, %.1f ms/frame (%.0f FPS), HUD+textdraw %.2f, UI %.2f, NET %.2f [pemain %.2f, kendaraan %.2f] ms",
                  sN, win / sN, sN * 1000.0 / win, sHud / sN, sUi / sN, g_acroProfNet / sN, g_acroProfPl / sN, g_acroProfVeh / sN);
+            FLog("STREAM: terpakai %zu MB / tersedia %zu MB, kendaraan dimuat maks %u", (size_t)(CStreaming::ms_memoryUsed >> 20), (size_t)(CStreaming::ms_memoryAvailable >> 20), (unsigned)CStreaming::desiredNumVehiclesLoaded);
             sHud = sUi = 0; sN = 0; sWin = acroT2; g_acroProfNet = g_acroProfPl = g_acroProfVeh = 0;""", 'profil print')
 wr(p, s)
 
