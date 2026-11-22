@@ -1318,7 +1318,7 @@ public:
 		ImVec2 d = ImGui::GetIO().DisplaySize;
 		float r = d.y * 0.066f;
 		setFixedSize(ImVec2(r * 2.0f, r * 2.0f));
-		setPosition(ImVec2(d.x * 0.880f - r, d.y * 0.546f - r));
+		setPosition(ImVec2(d.x * 0.880f - r, d.y * 0.575f - r));
 		m_cacheTick = 0; m_cacheShow = false;
 	}
 
@@ -1559,8 +1559,30 @@ wr(p, s)
 p = S + '/game/patches.cpp'
 s = rd(p)
 s = patch(s, r'\tCHook::RET\("_ZN8CShadows19RenderStaticShadowsEb"\);[^\n]*\n',
-          '\t// (dulu dimatikan) CShadows::RenderStaticShadows -> dipakai untuk cahaya lampu jalan di aspal, diaktifkan lagi\n',
-          'static shadows aktif')
+          '\t// CShadows::RenderStaticShadows = cahaya lampu jalan di aspal; bisa dimatikan lewat settings.ini [gui] StaticShadows=0\n\tif (pSettings && !pSettings->Get().bStaticShadows) CHook::RET("_ZN8CShadows19RenderStaticShadowsEb");\n',
+          'static shadows toggle')
+wr(p, s)
+
+p = S + '/settings.h'
+s = rd(p)
+s = patch_keep(s, r'(\tbool bPassengerUseTexture;)', lambda m: '\tbool bStaticShadows;\n' + m.group(1), 'settings.h StaticShadows')
+wr(p, s)
+p = S + '/settings.cpp'
+s = rd(p)
+s = patch_keep(s, r'(\tm_Settings\.bPassengerUseTexture = )', lambda m: '\tm_Settings.bStaticShadows = reader.GetBoolean("gui", "StaticShadows", true);\n' + m.group(1), 'settings.cpp StaticShadows')
+wr(p, s)
+
+# 15. Tombol voice digeser ~1% ke kiri (500 -> 493.6 dari lebar basis 640)
+p = S + '/gui/uisettings.cpp'
+s = rd(p)
+s = patch(s, r'ImVec2\(500\.0f, 180\.0f', 'ImVec2(493.6f, 180.0f', 'voice 1% kiri')
+wr(p, s)
+
+# 15b. Log damage untuk diagnosa tonjok/tembak PC <-> Android
+p = S + '/net/localplayer.cpp'
+s = rd(p)
+s = patch_keep(s, r'(void CLocalPlayer::SendTakeDamageEvent\([^)]*\)\s*\{\n)', lambda m: m.group(1) + '\tFLog("DAMAGE kirim TAKE dari=%d faktor=%.2f senjata=%d bagian=%d", PlayerID, fDamageFactor, weaponType, pedPieceType);\n', 'log take')
+s = patch_keep(s, r'(void CLocalPlayer::SendGiveDamageEvent\([^)]*\)\s*\{\n)', lambda m: m.group(1) + '\tFLog("DAMAGE kirim GIVE ke=%d faktor=%.2f senjata=%d bagian=%d", PlayerID, fDamageFactor, weaponType, pedPieceType);\n', 'log give')
 wr(p, s)
 
 # 13d. Tombol penumpang memakai tekstur "PassengerButton" dari mobile.txt bila ada (cadangan: gambar vektor)
