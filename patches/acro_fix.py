@@ -1581,3 +1581,112 @@ s = patch(s, r'uint32_t m_cacheTick;\s*bool m_cacheShow;\s*\};',
           'uint32_t m_cacheTick;\n\tbool m_cacheShow;\n\tRwTexture* m_tex;\n\tbool m_texTried;\n};', 'pb members')
 wr(p, s)
 print('OK  tekstur RLE tidak terpotong, lampu jalan aktif, beku server tidak kunci tombol, tombol penumpang pakai tekstur, profil FPS')
+
+# ======================================================================== BAGIAN 14 (22 Nov, dari log baru)
+# 14a. Tombol bawaan GTA nyangkut (lari saat di mobil, panah setir saat jalan kaki). Penyebab: widget "lari" tidak punya nama
+#      (nama kosong) sehingga aturan lama tidak pernah kena, dan widget yang Update-nya dilewati membeku di keadaan terakhir.
+#      Sekarang dikenali dari POSISI (lari menimpa tombol gas; panah setir ada di kiri-bawah), dan saat disembunyikan
+#      status + alpha dipaksa mati lalu dipulihkan persis saat boleh tampil lagi.
+p = S + '/game/Widgets/WidgetGta.cpp'
+s = rd(p)
+s = patch(s, r'bool intended; bool forced; \};', 'bool intended; bool forced; uint8_t savedAlpha; bool alphaSaved; };', 'entry alpha')
+s = patch(s, r'(    g_acroWidgets\[g_acroWidgetCount\]\.forced = false;\n)',
+          '    g_acroWidgets[g_acroWidgetCount].forced = false;\n    g_acroWidgets[g_acroWidgetCount].savedAlpha = 255;\n    g_acroWidgets[g_acroWidgetCount].alphaSaved = false;\n', 'entry alpha init')
+s = patch(s, r'    CPlayerPed\* pPed = pGame->FindPlayerPed\(\);\n    if \(!pPed \|\| !pPed->m_pPed\) return false;\n    if \(!pPed->IsInVehicle\(\)\) return false;\n',
+"""    CPlayerPed* pPed = pGame->FindPlayerPed();
+    if (!pPed || !pPed->m_pPed) return false;
+    bool inVeh = pPed->IsInVehicle();
+
+    CWidgetGta* acc = m_pWidgets[WidgetIDs::WIDGET_ACCELERATE];
+    CWidgetGta* brk = m_pWidgets[WidgetIDs::WIDGET_BRAKE];
+    if (acc && brk && w != acc && w != brk && w->m_RectScreen.right > w->m_RectScreen.left)
+    {
+        float aw = acc->m_RectScreen.right - acc->m_RectScreen.left;
+        if (aw < 0) aw = -aw;
+        float ax = (acc->m_RectScreen.left + acc->m_RectScreen.right) * 0.5f;
+        float ay = (acc->m_RectScreen.top + acc->m_RectScreen.bottom) * 0.5f;
+        float bx = (brk->m_RectScreen.left + brk->m_RectScreen.right) * 0.5f;
+        float cx = (w->m_RectScreen.left + w->m_RectScreen.right) * 0.5f;
+        float cy = (w->m_RectScreen.top + w->m_RectScreen.bottom) * 0.5f;
+        if (aw > 1.0f)
+        {
+            // tombol lari/loncat yang menimpa tombol gas -> sembunyikan saat di kendaraan
+            if (inVeh && fabsf(cx - ax) < aw * 0.35f && fabsf(cy - ay) < aw * 0.35f) return true;
+            // panah setir kiri/kanan (kiri-bawah) -> sembunyikan saat jalan kaki
+            if (!inVeh && (!strcmp(n, "hud_left") || !strcmp(n, "hud_right")) &&
+                cx < bx - aw * 0.5f && fabsf(cy - ay) < aw * 0.8f) return true;
+        }
+    }
+    if (!inVeh) return false;
+""", 'hide rules posisi')
+s = patch(s, r'            case STATE_NONE:\n                if \(e && e->forced\) \{ e->forced = false; CWidget__SetEnabled\(thiz, e->intended\); \}\n                break;\n            case STATE_FIXED:\n                if \(e\) \{ e->forced = true; CWidget__SetEnabled\(thiz, false\); \}\n                return;\n',
+"""            case STATE_NONE:
+                if (e && e->forced)
+                {
+                    e->forced = false;
+                    if (e->alphaSaved) { thiz->m_Color.a = e->savedAlpha; e->alphaSaved = false; }
+                    CWidget__SetEnabled(thiz, e->intended);
+                }
+                break;
+            case STATE_FIXED:
+                if (e)
+                {
+                    if (!e->alphaSaved && thiz->m_Color.a != 0) { e->savedAlpha = thiz->m_Color.a; e->alphaSaved = true; }
+                    e->forced = true;
+                    thiz->m_bEnabled = false;
+                    thiz->m_bCachedEnabled = false;
+                    thiz->m_Color.a = 0;
+                }
+                return;
+""", 'update hook paksa mati')
+wr(p, s)
+
+# 14b. Profil lebih rinci: waktu NetGame::Process (jaringan + pemain + kendaraan) per frame
+p = S + '/game/hooks.cpp'
+s = rd(p)
+s = patch(s, r'#include <chrono>\nvoid Render2dStuff\(\)',
+          '#include <chrono>\ndouble g_acroProfNet = 0, g_acroProfPl = 0, g_acroProfVeh = 0;\nvoid Render2dStuff()', 'profil global')
+s = patch(s, r'FLog\("PROFIL 5dtk:.*?sWin = acroT2;',
+"""FLog("PROFIL 5dtk: %d frame, %.1f ms/frame (%.0f FPS), HUD+textdraw %.2f, UI %.2f, NET %.2f [pemain %.2f, kendaraan %.2f] ms",
+                 sN, win / sN, sN * 1000.0 / win, sHud / sN, sUi / sN, g_acroProfNet / sN, g_acroProfPl / sN, g_acroProfVeh / sN);
+            sHud = sUi = 0; sN = 0; sWin = acroT2; g_acroProfNet = g_acroProfPl = g_acroProfVeh = 0;""", 'profil print')
+wr(p, s)
+
+p = S + '/main.cpp'
+s = rd(p)
+s = patch(s, r'if \(pNetGame\) \{\s*pNetGame->Process\(\);\s*\}',
+"""if (pNetGame) {
+		extern double g_acroProfNet;
+		auto acroN0 = std::chrono::steady_clock::now();
+		pNetGame->Process();
+		g_acroProfNet += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - acroN0).count();
+	}""", 'profil net main')
+s = (s[:3] + '#include <chrono>\n' + s[3:]) if s.startswith('\xef\xbb\xbf') else ('#include <chrono>\n' + s)
+wr(p, s)
+
+p = S + '/net/netgame.cpp'
+s = rd(p)
+s = patch(s, r'\tif \(GetPlayerPool\(\)\) \{\s*GetPlayerPool\(\)->Process\(\);\s*\}\s*if\(GetVehiclePool\(\)\) \{\s*GetVehiclePool\(\)->Process\(\);\s*\}',
+"""	extern double g_acroProfPl, g_acroProfVeh;
+	if (GetPlayerPool()) {
+		auto acroP0 = std::chrono::steady_clock::now();
+		GetPlayerPool()->Process();
+		g_acroProfPl += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - acroP0).count();
+	}
+
+	if(GetVehiclePool()) {
+		auto acroV0 = std::chrono::steady_clock::now();
+		GetVehiclePool()->Process();
+		g_acroProfVeh += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - acroV0).count();
+	}""", 'profil pools')
+s = (s[:3] + '#include <chrono>\n' + s[3:]) if s.startswith('\xef\xbb\xbf') else ('#include <chrono>\n' + s)
+wr(p, s)
+
+# 14c. Diagnosa freeze: catat tiap perintah bekukan/lepas dari server beserta status di kendaraan
+p = S + '/net/scriptrpc.cpp'
+s = rd(p)
+s = patch(s, r'(\tg_bAcroServerFrozen = \(byteControllable == 0\);\n)',
+          '\tg_bAcroServerFrozen = (byteControllable == 0);\n\tFLog("Server %s pemain (di kendaraan=%d)", byteControllable ? "MELEPAS beku" : "MEMBEKUKAN", (pGame && pGame->FindPlayerPed() && pGame->FindPlayerPed()->IsInVehicle()) ? 1 : 0);\n',
+          'freeze diag')
+wr(p, s)
+print('OK  tombol bawaan nyangkut (posisi + alpha), profil NET/pemain/kendaraan, diagnosa freeze')
