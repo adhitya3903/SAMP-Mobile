@@ -1713,3 +1713,48 @@ s = patch(s, r'(\tg_bAcroServerFrozen = \(byteControllable == 0\);\n)',
           'freeze diag')
 wr(p, s)
 print('OK  tombol bawaan nyangkut (posisi + alpha), profil NET/pemain/kendaraan, diagnosa freeze')
+
+# 16. Crash 32-bit (Redmi 6A): CSprite2d::Draw(UV) dipanggil lewat offset hard-code 0x1974EC yang bukan kode
+#     (SIGSEGV pc=libGTASA+0x1974EC, pemanggil DrawTextureUV <- CTextDraw sprite). Ganti dengan gambar sendiri.
+p = S + '/game/util.cpp'
+s = rd(p)
+s = patch(s, r'void DrawTextureUV\(uintptr_t texture, CRect\* rect, uint32_t dwColor, float \*uv\)\s*\{.*?\n\}\n',
+"""void DrawTextureUV(uintptr_t texture, CRect* rect, uint32_t dwColor, float *uv)
+{
+	if (!texture || !rect || !uv) return;
+
+	RwRenderStateSet(rwRENDERSTATETEXTUREFILTER, (void*)rwFILTERLINEAR);
+#if VER_x32
+	// 32-bit: jangan pakai alamat hard-code, gambar sendiri lewat CSprite2d buatan modul ini
+	alignas(CSprite2d) static char s_acroSpriteBuf[sizeof(CSprite2d)];
+	CSprite2d* spr = reinterpret_cast<CSprite2d*>(s_acroSpriteBuf);
+	spr->m_pTexture = (RwTexture*)texture;
+	CRGBA col;
+	col.r = (uint8_t)(dwColor & 0xFF); col.g = (uint8_t)((dwColor >> 8) & 0xFF);
+	col.b = (uint8_t)((dwColor >> 16) & 0xFF); col.a = (uint8_t)((dwColor >> 24) & 0xFF);
+	spr->SetVertices(*rect, col, col, col, col, uv[0], uv[1], uv[2], uv[3], uv[4], uv[5], uv[6], uv[7]);
+	spr->SetRenderState();
+	RwIm2DRenderPrimitive(rwPRIMTYPETRIFAN, CSprite2d::maVertices, 4);
+	RwRenderStateSet(rwRENDERSTATETEXTURERASTER, RWRSTATE(NULL));
+	spr->m_pTexture = nullptr; // jangan sampai destruktor / pemilik lain terpengaruh
+#else
+	((void(*)(uintptr_t, CRect*, uint32_t*, float, float, float, float, float, float, float, float))
+		(g_libGTASA + 0x6EDC5C))(texture, rect, &dwColor, uv[0], uv[1], uv[2], uv[3], uv[4], uv[5], uv[6], uv[7]);
+#endif
+}
+""", 'DrawTextureUV 32-bit')
+if '#include "sprite2d.h"' not in s:
+    s = (s[:3] + '#include "sprite2d.h"\n' + s[3:]) if s.startswith('\xef\xbb\xbf') else ('#include "sprite2d.h"\n' + s)
+wr(p, s)
+print('OK  DrawTextureUV 32-bit tidak lagi lewat alamat hard-code (crash textdraw sprite Redmi 6A)')
+
+# ===== BAGIAN 17: stiker / MaterialText (SetObjectMaterialText) tidak muncul =====
+# Bug asli: `auto info = Encoding::cp2utf(text).c_str();` -> std::string sementara sudah hancur
+# sebelum dipakai, jadi teks yang digambar sampah/kosong. Simpan string-nya dulu.
+p = S + '/game/materialtextgenerator.cpp'
+s = rd(p)
+s = patch(s, r'auto info = Encoding::cp2utf\(text\)\.c_str\(\);',
+"std::string infoStr = Encoding::cp2utf(text ? text : \"\");\n\t\tconst char* info = infoStr.c_str();",
+'MaterialText dangling pointer')
+wr(p, s)
+print('OK  MaterialText: string teks stiker tidak lagi dangling pointer')
