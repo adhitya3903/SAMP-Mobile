@@ -1820,3 +1820,20 @@ s = patch(s, r'FLog\("Error: Texture \(%s\) not found in database \(%s\)", dbnam
 s = patch(s, r'FLog\("WARNING! No tex = %s", name\);', '// (log dihapus: terlalu berisik)', 'CUtil warn log')
 wr(p, s)
 print('OK  limiter ON tidak lagi 20 FPS, crash pukul/tembak 32-bit, lookup tekstur gagal tidak diulang')
+
+# ===== BAGIAN 19: PC -> Android tidak mengurangi darah (kebal) =====
+# Di ComputeDamageResponse, baris pertama "damager bukan pemain lokal -> return true (lewati)" jalan SEBELUM
+# cabang korban = pemain lokal. Akibatnya SendTakeDamageEvent tidak pernah terkirim saat pemain lain memukul/menembak
+# pemain Android -> server tidak tahu, korban kebal. Android->PC aman karena damager = pemain lokal.
+p = S + '/game/hooks.cpp'
+s = rd(p)
+s = patch(s, r'if \(pDamager != pGamePed && IsValidGamePed\(pGamePed\)\) /\* CCivilianPed \*/\s*return true;',
+"""if (pDamager != pGamePed && IsValidGamePed(pGamePed)) /* CCivilianPed */
+	{
+		// jangan lewati bila pemain lain (remote) mengenai pemain lokal: harus dilaporkan sebagai TakeDamage
+		bool remoteHitsLocal = (pPed == pGamePed) && pDamager &&
+			(FindPlayerIDFromGtaPtr(pDamager) != INVALID_PLAYER_ID);
+		if (!remoteHitsLocal) return true;
+	}""", 'damage: remote -> local')
+wr(p, s)
+print('OK  damage PC->Android: TakeDamage sekarang terkirim saat pemain lain mengenai pemain lokal')
