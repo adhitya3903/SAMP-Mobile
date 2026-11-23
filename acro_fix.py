@@ -1713,3 +1713,110 @@ s = patch(s, r'(\tg_bAcroServerFrozen = \(byteControllable == 0\);\n)',
           'freeze diag')
 wr(p, s)
 print('OK  tombol bawaan nyangkut (posisi + alpha), profil NET/pemain/kendaraan, diagnosa freeze')
+
+# 16. Crash 32-bit (Redmi 6A): CSprite2d::Draw(UV) dipanggil lewat offset hard-code 0x1974EC yang bukan kode
+#     (SIGSEGV pc=libGTASA+0x1974EC, pemanggil DrawTextureUV <- CTextDraw sprite). Ganti dengan gambar sendiri.
+p = S + '/game/util.cpp'
+s = rd(p)
+s = patch(s, r'void DrawTextureUV\(uintptr_t texture, CRect\* rect, uint32_t dwColor, float \*uv\)\s*\{.*?\n\}\n',
+"""void DrawTextureUV(uintptr_t texture, CRect* rect, uint32_t dwColor, float *uv)
+{
+	if (!texture || !rect || !uv) return;
+
+	RwRenderStateSet(rwRENDERSTATETEXTUREFILTER, (void*)rwFILTERLINEAR);
+#if VER_x32
+	// 32-bit: jangan pakai alamat hard-code, gambar sendiri lewat CSprite2d buatan modul ini
+	alignas(CSprite2d) static char s_acroSpriteBuf[sizeof(CSprite2d)];
+	CSprite2d* spr = reinterpret_cast<CSprite2d*>(s_acroSpriteBuf);
+	spr->m_pTexture = (RwTexture*)texture;
+	CRGBA col;
+	col.r = (uint8_t)(dwColor & 0xFF); col.g = (uint8_t)((dwColor >> 8) & 0xFF);
+	col.b = (uint8_t)((dwColor >> 16) & 0xFF); col.a = (uint8_t)((dwColor >> 24) & 0xFF);
+	spr->SetVertices(*rect, col, col, col, col, uv[0], uv[1], uv[2], uv[3], uv[4], uv[5], uv[6], uv[7]);
+	spr->SetRenderState();
+	RwIm2DRenderPrimitive(rwPRIMTYPETRIFAN, CSprite2d::maVertices, 4);
+	RwRenderStateSet(rwRENDERSTATETEXTURERASTER, RWRSTATE(NULL));
+	spr->m_pTexture = nullptr; // jangan sampai destruktor / pemilik lain terpengaruh
+#else
+	((void(*)(uintptr_t, CRect*, uint32_t*, float, float, float, float, float, float, float, float))
+		(g_libGTASA + 0x6EDC5C))(texture, rect, &dwColor, uv[0], uv[1], uv[2], uv[3], uv[4], uv[5], uv[6], uv[7]);
+#endif
+}
+""", 'DrawTextureUV 32-bit')
+if '#include "sprite2d.h"' not in s:
+    s = (s[:3] + '#include "sprite2d.h"\n' + s[3:]) if s.startswith('\xef\xbb\xbf') else ('#include "sprite2d.h"\n' + s)
+wr(p, s)
+print('OK  DrawTextureUV 32-bit tidak lagi lewat alamat hard-code (crash textdraw sprite Redmi 6A)')
+
+# ===== BAGIAN 17: stiker / MaterialText (SetObjectMaterialText) tidak muncul =====
+# Bug asli: `auto info = Encoding::cp2utf(text).c_str();` -> std::string sementara sudah hancur
+# sebelum dipakai, jadi teks yang digambar sampah/kosong. Simpan string-nya dulu.
+p = S + '/game/materialtextgenerator.cpp'
+s = rd(p)
+s = patch(s, r'auto info = Encoding::cp2utf\(text\)\.c_str\(\);',
+"std::string infoStr = Encoding::cp2utf(text ? text : \"\");\n\t\tconst char* info = infoStr.c_str();",
+'MaterialText dangling pointer')
+wr(p, s)
+print('OK  MaterialText: string teks stiker tidak lagi dangling pointer')
+
+# ===== BAGIAN 18: FPS limiter ON=20fps, crash 32-bit saat pukul/tembak, spam lookup tekstur =====
+# 18a. Frame limiter bawaan GTA: DoGameState menulis RsGlobal.maxFPS = (flag limiter ? 20 : 30).
+#      Patch lama cuma mengubah cabang "30"; cabang "20" (limiter ON) tidak tersentuh -> FPS mentok 20.
+p = S + '/game/patches.cpp'
+s = rd(p)
+s = patch(s, r'#if VER_x32\s*CHook::WriteMemory\(g_libGTASA \+ 0x005E49E0, \(uintptr_t\)& fps, 1\);\s*CHook::WriteMemory\(g_libGTASA \+ 0x005E492E, \(uintptr_t\)& fps, 1\);\s*#else',
+"""#if VER_x32
+    CHook::WriteMemory(g_libGTASA + 0x005E49E0, (uintptr_t)& fps, 1);
+    CHook::WriteMemory(g_libGTASA + 0x005E49E6, (uintptr_t)& fps, 1); // cabang "frame limiter ON" (asli 20)
+    CHook::WriteMemory(g_libGTASA + 0x005E492E, (uintptr_t)& fps, 1);
+#else
+    CHook::WriteMemory(g_libGTASA + 0x70A464, "\\xE8\\x0F\\x1E\\x32", 4); // mov w8,#20 -> orr w8,wzr,#60 (cabang limiter ON)""", 'FPS limiter ON cabang 20')
+s = patch(s, r'(#if VER_x32\s*CHook::WriteMemory\(g_libGTASA \+ 0x005E49E0.*?\n#else\n    CHook::WriteMemory\(g_libGTASA \+ 0x70A464[^\n]*\n)\s*CHook::WriteMemory\(g_libGTASA \+ 0x70A38C', 
+"""\\1    CHook::WriteMemory(g_libGTASA + 0x70A38C""", 'dummy-check') if False else s
+wr(p, s)
+
+# 18b. Crash Redmi 6A (SIGSEGV di CTaskSimpleUseGun::SetMoveAnim saat pukul/tembak):
+#      di 32-bit offset libGTASA+0x4DD9E8 adalah INSTRUKSI (ldr r0,[r6,#0x18]), bukan konstanta float,
+#      tapi hooks.cpp menimpanya dengan 0.015f -> instruksi rusak.
+p = S + '/game/hooks.cpp'
+s = rd(p)
+s = patch(s, r'#if VER_x32\s*CHook::UnFuck\(g_libGTASA \+ 0x4DD9E8\);\s*\*\(float\*\)\(g_libGTASA \+ 0x4DD9E8\) = 0\.015f;\s*#else',
+"#if VER_x32\n    // (dihapus) menimpa instruksi SetMoveAnim di libGTASA+0x4DD9E8 -> crash saat pukul/tembak di 32-bit\n#else", 'hapus tulis 0x4DD9E8')
+wr(p, s)
+
+# 18c. Lookup tekstur yang gagal diulang ribuan kali (ld_drv:blkdot dst.) dan tiap kegagalan menulis 6 baris log
+#      (file + logcat + crashlytics). Ingat nama yang tidak ketemu, dan hilangkan log ributnya.
+p = S + '/game/util.cpp'
+s = rd(p)
+s = patch(s, r'uintptr_t LoadTexture\(const char\* texname\)\s*\{\s*static char\* texdb\[\] = \{ "samp", "gta3", "gta_int", "player", "txd"\};.*?\n\}\n',
+"""#include <unordered_set>
+#include <string>
+uintptr_t LoadTexture(const char* texname)
+{
+    static char* texdb[] = { "samp", "gta3", "gta_int", "player", "txd"};
+    static std::unordered_set<std::string> s_missing;
+
+    if (!texname) return 0;
+    if (s_missing.find(texname) != s_missing.end()) return 0;
+
+    for (int i = 0; i < sizeof(texdb) / sizeof(const char*); i++)
+    {
+        uintptr_t texture = (uintptr_t)CUtil::LoadTextureFromDB(texdb[i], texname);
+        if (texture != 0) {
+            return texture;
+        }
+    }
+
+    s_missing.insert(texname);
+    FLog("Texture: %s not found!", texname); // sekali saja per nama
+    return 0;
+}
+""", 'LoadTexture negative cache')
+wr(p, s)
+
+p = S + '/util/CUtil.cpp'
+s = rd(p)
+s = patch(s, r'FLog\("Error: Texture \(%s\) not found in database \(%s\)", dbname, texture\);', '// (log dihapus: terlalu berisik)', 'CUtil err log')
+s = patch(s, r'FLog\("WARNING! No tex = %s", name\);', '// (log dihapus: terlalu berisik)', 'CUtil warn log')
+wr(p, s)
+print('OK  limiter ON tidak lagi 20 FPS, crash pukul/tembak 32-bit, lookup tekstur gagal tidak diulang')
