@@ -1837,3 +1837,50 @@ s = patch(s, r'if \(pDamager != pGamePed && IsValidGamePed\(pGamePed\)\) /\* CCi
 	}""", 'damage: remote -> local')
 wr(p, s)
 print('OK  damage PC->Android: TakeDamage sekarang terkirim saat pemain lain mengenai pemain lokal')
+
+# ===== BAGIAN 20: crash SIGBUS 32-bit (ReadVector ke field struct packed), loop reload, penanda versi =====
+VERSI = 'v3.3'
+
+# 20a. SIGBUS Redmi 6A: ReadVector(float&,float&,float&) dipanggil dengan referensi ke field struct #pragma pack(1)
+#      (vecMoveSpeed). Alamat field bisa tidak sejajar 4-byte, dan instruksi vstr di ARM32 mati (SIGBUS) bila begitu.
+#      Baca ke float lokal dulu, baru salin dengan memcpy.
+p = S + '/net/netgame.cpp'
+s = rd(p)
+s = patch(s, r'bsData\.ReadVector\(ofSync\.vecMoveSpeed\.x, ofSync\.vecMoveSpeed\.y, ofSync\.vecMoveSpeed\.z\);',
+"""{ float acMx = 0.0f, acMy = 0.0f, acMz = 0.0f;
+	bsData.ReadVector(acMx, acMy, acMz);
+	memcpy(&ofSync.vecMoveSpeed.x, &acMx, sizeof(float));
+	memcpy(&ofSync.vecMoveSpeed.y, &acMy, sizeof(float));
+	memcpy(&ofSync.vecMoveSpeed.z, &acMz, sizeof(float)); }""", 'ReadVector onfoot aman')
+s = patch(s, r'bsData\.ReadVector\(icSync\.vecMoveSpeed\.x, icSync\.vecMoveSpeed\.y, icSync\.vecMoveSpeed\.z\);',
+"""{ float acMx = 0.0f, acMy = 0.0f, acMz = 0.0f;
+	bsData.ReadVector(acMx, acMy, acMz);
+	memcpy(&icSync.vecMoveSpeed.x, &acMx, sizeof(float));
+	memcpy(&icSync.vecMoveSpeed.y, &acMy, sizeof(float));
+	memcpy(&icSync.vecMoveSpeed.z, &acMz, sizeof(float)); }""", 'ReadVector incar aman')
+wr(p, s)
+
+# 20b. Loop reload di Android untuk pemain PC. Nilai byteWeaponState dari jaringan SA-MP:
+#      0=tanpa peluru 1=peluru terakhir 2=masih ada peluru 3=reload. Kode membandingkan dengan enum internal GTA
+#      (RELOADING=2), jadi status normal "masih ada peluru" (2) dianggap reload terus.
+p = S + '/net/remoteplayer.cpp'
+s = rd(p)
+s = patch(s, r'if \(paimSync->byteWeaponState == WEAPONSTATE_RELOADING\)\s*\{[^}]*\}\s*else\s*if \(paimSync->byteWeaponState != WEAPONSTATE_FIRING\)\s*pwstWeapon->dwAmmoInClip = \(uint32_t\)paimSync->byteWeaponState;\s*else\s*if \(pwstWeapon->dwAmmoInClip < 2\)\s*pwstWeapon->dwAmmoInClip = 2;',
+"""if (pwstWeapon)
+	{
+		switch (paimSync->byteWeaponState)
+		{
+			case 3:  if (pwstWeapon->dwState != 2) pwstWeapon->dwState = (eWeaponState)2; break; // reload (enum GTA: RELOADING = 2)
+			case 2:  if (pwstWeapon->dwAmmoInClip < 30) pwstWeapon->dwAmmoInClip = 30; break;     // jangan habis di tengah tembakan
+			default: pwstWeapon->dwAmmoInClip = (uint32_t)paimSync->byteWeaponState; break;
+		}
+	}""", 'remote weapon state mapping')
+wr(p, s)
+
+# 20c. Penanda versi di log supaya jelas build mana yang berjalan
+p = S + '/game/patches.cpp'
+s = rd(p)
+s = patch(s, r'FLog\("New fps limit = %d", fps\);',
+'FLog("New fps limit = %d", fps);\n    FLog("ACRO build %s: limiter ON/OFF = 60, SIGBUS ReadVector, reload fix, damage TAKE", "' + VERSI + '");', 'penanda versi')
+wr(p, s)
+print('OK  v3.3: SIGBUS ReadVector 32-bit, loop reload pemain PC, penanda versi di log')
