@@ -1758,3 +1758,65 @@ s = patch(s, r'auto info = Encoding::cp2utf\(text\)\.c_str\(\);',
 'MaterialText dangling pointer')
 wr(p, s)
 print('OK  MaterialText: string teks stiker tidak lagi dangling pointer')
+
+# ===== BAGIAN 18: FPS limiter ON=20fps, crash 32-bit saat pukul/tembak, spam lookup tekstur =====
+# 18a. Frame limiter bawaan GTA: DoGameState menulis RsGlobal.maxFPS = (flag limiter ? 20 : 30).
+#      Patch lama cuma mengubah cabang "30"; cabang "20" (limiter ON) tidak tersentuh -> FPS mentok 20.
+p = S + '/game/patches.cpp'
+s = rd(p)
+s = patch(s, r'#if VER_x32\s*CHook::WriteMemory\(g_libGTASA \+ 0x005E49E0, \(uintptr_t\)& fps, 1\);\s*CHook::WriteMemory\(g_libGTASA \+ 0x005E492E, \(uintptr_t\)& fps, 1\);\s*#else',
+"""#if VER_x32
+    CHook::WriteMemory(g_libGTASA + 0x005E49E0, (uintptr_t)& fps, 1);
+    CHook::WriteMemory(g_libGTASA + 0x005E49E6, (uintptr_t)& fps, 1); // cabang "frame limiter ON" (asli 20)
+    CHook::WriteMemory(g_libGTASA + 0x005E492E, (uintptr_t)& fps, 1);
+#else
+    CHook::WriteMemory(g_libGTASA + 0x70A464, "\\xE8\\x0F\\x1E\\x32", 4); // mov w8,#20 -> orr w8,wzr,#60 (cabang limiter ON)""", 'FPS limiter ON cabang 20')
+s = patch(s, r'(#if VER_x32\s*CHook::WriteMemory\(g_libGTASA \+ 0x005E49E0.*?\n#else\n    CHook::WriteMemory\(g_libGTASA \+ 0x70A464[^\n]*\n)\s*CHook::WriteMemory\(g_libGTASA \+ 0x70A38C', 
+"""\\1    CHook::WriteMemory(g_libGTASA + 0x70A38C""", 'dummy-check') if False else s
+wr(p, s)
+
+# 18b. Crash Redmi 6A (SIGSEGV di CTaskSimpleUseGun::SetMoveAnim saat pukul/tembak):
+#      di 32-bit offset libGTASA+0x4DD9E8 adalah INSTRUKSI (ldr r0,[r6,#0x18]), bukan konstanta float,
+#      tapi hooks.cpp menimpanya dengan 0.015f -> instruksi rusak.
+p = S + '/game/hooks.cpp'
+s = rd(p)
+s = patch(s, r'#if VER_x32\s*CHook::UnFuck\(g_libGTASA \+ 0x4DD9E8\);\s*\*\(float\*\)\(g_libGTASA \+ 0x4DD9E8\) = 0\.015f;\s*#else',
+"#if VER_x32\n    // (dihapus) menimpa instruksi SetMoveAnim di libGTASA+0x4DD9E8 -> crash saat pukul/tembak di 32-bit\n#else", 'hapus tulis 0x4DD9E8')
+wr(p, s)
+
+# 18c. Lookup tekstur yang gagal diulang ribuan kali (ld_drv:blkdot dst.) dan tiap kegagalan menulis 6 baris log
+#      (file + logcat + crashlytics). Ingat nama yang tidak ketemu, dan hilangkan log ributnya.
+p = S + '/game/util.cpp'
+s = rd(p)
+s = patch(s, r'uintptr_t LoadTexture\(const char\* texname\)\s*\{\s*static char\* texdb\[\] = \{ "samp", "gta3", "gta_int", "player", "txd"\};.*?\n\}\n',
+"""#include <unordered_set>
+#include <string>
+uintptr_t LoadTexture(const char* texname)
+{
+    static char* texdb[] = { "samp", "gta3", "gta_int", "player", "txd"};
+    static std::unordered_set<std::string> s_missing;
+
+    if (!texname) return 0;
+    if (s_missing.find(texname) != s_missing.end()) return 0;
+
+    for (int i = 0; i < sizeof(texdb) / sizeof(const char*); i++)
+    {
+        uintptr_t texture = (uintptr_t)CUtil::LoadTextureFromDB(texdb[i], texname);
+        if (texture != 0) {
+            return texture;
+        }
+    }
+
+    s_missing.insert(texname);
+    FLog("Texture: %s not found!", texname); // sekali saja per nama
+    return 0;
+}
+""", 'LoadTexture negative cache')
+wr(p, s)
+
+p = S + '/util/CUtil.cpp'
+s = rd(p)
+s = patch(s, r'FLog\("Error: Texture \(%s\) not found in database \(%s\)", dbname, texture\);', '// (log dihapus: terlalu berisik)', 'CUtil err log')
+s = patch(s, r'FLog\("WARNING! No tex = %s", name\);', '// (log dihapus: terlalu berisik)', 'CUtil warn log')
+wr(p, s)
+print('OK  limiter ON tidak lagi 20 FPS, crash pukul/tembak 32-bit, lookup tekstur gagal tidak diulang')
