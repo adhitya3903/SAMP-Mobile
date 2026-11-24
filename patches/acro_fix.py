@@ -1839,7 +1839,7 @@ wr(p, s)
 print('OK  damage PC->Android: TakeDamage sekarang terkirim saat pemain lain mengenai pemain lokal')
 
 # ===== BAGIAN 20: crash SIGBUS 32-bit (ReadVector ke field struct packed), loop reload, penanda versi =====
-VERSI = 'v3.3'
+VERSI = 'v3.4'
 
 # 20a. SIGBUS Redmi 6A: ReadVector(float&,float&,float&) dipanggil dengan referensi ke field struct #pragma pack(1)
 #      (vecMoveSpeed). Alamat field bisa tidak sejajar 4-byte, dan instruksi vstr di ARM32 mati (SIGBUS) bila begitu.
@@ -1884,3 +1884,36 @@ s = patch(s, r'FLog\("New fps limit = %d", fps\);',
 'FLog("New fps limit = %d", fps);\n    FLog("ACRO build %s: limiter ON/OFF = 60, SIGBUS ReadVector, reload fix, damage TAKE", "' + VERSI + '");', 'penanda versi')
 wr(p, s)
 print('OK  v3.3: SIGBUS ReadVector 32-bit, loop reload pemain PC, penanda versi di log')
+
+# ============================================================ BAGIAN 21 (v3.4)
+# 21a. Aim sync keluar: enum internal Android (RELOADING=2) != nilai kabel SA-MP (reload=3, masih ada peluru=2).
+#      Dulu: reload dikirim 2, peluru banyak dikirim 1 -> PC melihat karakter Android terus "ngisi peluru".
+p = S + '/net/localplayer.cpp'
+s = rd(p)
+s = patch(s, r'if \(pwstWeapon->dwState == 2\)\s*aimSync\.byteWeaponState = WEAPONSTATE_RELOADING;\s*else\s*aimSync\.byteWeaponState = \(pwstWeapon->dwAmmoInClip > 1\) \? WEAPONSTATE_FIRING : pwstWeapon->dwAmmoInClip;',
+"""if (pwstWeapon->dwState == 2)
+		aimSync.byteWeaponState = 3; // kabel SA-MP: 3 = reload
+	else if (pwstWeapon->dwAmmoInClip > 1)
+		aimSync.byteWeaponState = 2; // kabel: 2 = masih ada peluru
+	else if (pwstWeapon->dwAmmoInClip == 1)
+		aimSync.byteWeaponState = 1; // kabel: 1 = peluru terakhir
+	else
+		aimSync.byteWeaponState = (pwstWeapon->dwAmmo > 0) ? 2 : 0; // klip 0 tapi masih punya amunisi: jangan dianggap habis""", 'aim sync keluar mapping')
+wr(p, s)
+
+# 21b. Tombol mati setelah checkpoint/GPS: flag EnableGameInput(false) bisa tersangkut (keyboard/tablist
+#      ditutup lewat jalur lain), baru pulih saat kirim chat (Keyboard::hide -> EnableGameInput(true)).
+#      Sekarang dihitung ulang tiap sentuhan dari keadaan UI yang benar-benar tampil.
+p = S + '/game/hooks.cpp'
+s = rd(p)
+s = patch(s, r'\tif \(pGame->IsGameInputEnabled\(\)\)\n\t\tAND_TouchEvent\(type, num, posX, posY\);',
+"""\tif (!pGame->IsGameInputEnabled() && pUI &&
+		!pUI->keyboard()->visible() && !pUI->dialog()->visible() && !pUI->playertablist()->visible())
+	{
+		FLog("Input game tersangkut nonaktif tanpa UI tampil -> dipulihkan");
+		pGame->EnableGameInput(true);
+	}
+	if (pGame->IsGameInputEnabled())
+		AND_TouchEvent(type, num, posX, posY);""", 'input game self-heal')
+wr(p, s)
+print('OK  v3.4: aim sync keluar (reload), input game tersangkut')
