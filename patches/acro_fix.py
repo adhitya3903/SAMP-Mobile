@@ -1839,7 +1839,7 @@ wr(p, s)
 print('OK  damage PC->Android: TakeDamage sekarang terkirim saat pemain lain mengenai pemain lokal')
 
 # ===== BAGIAN 20: crash SIGBUS 32-bit (ReadVector ke field struct packed), loop reload, penanda versi =====
-VERSI = 'v3.4'
+VERSI = 'v3.6'
 
 # 20a. SIGBUS Redmi 6A: ReadVector(float&,float&,float&) dipanggil dengan referensi ke field struct #pragma pack(1)
 #      (vecMoveSpeed). Alamat field bisa tidak sejajar 4-byte, dan instruksi vstr di ARM32 mati (SIGBUS) bila begitu.
@@ -1917,3 +1917,164 @@ s = patch(s, r'\tif \(pGame->IsGameInputEnabled\(\)\)\n\t\tAND_TouchEvent\(type,
 		AND_TouchEvent(type, num, posX, posY);""", 'input game self-heal')
 wr(p, s)
 print('OK  v3.4: aim sync keluar (reload), input game tersangkut')
+
+# ============================================================ BAGIAN 22 (v3.5)
+# 22a. HP kendaraan: nilai di luar 0..1000 (atau NaN) tidak boleh dikirim ke server / diterapkan dari jaringan.
+#      Dicatat di log supaya terlihat dari mana angka aneh (mis. 22470) berasal.
+p = S + '/net/localplayer.cpp'
+s = rd(p)
+s = patch(s, r'icSync\.fCarHealth = pVehicle->GetHealth\(\);',
+"""{ float acH = pVehicle->GetHealth();
+	if (!(acH >= 0.0f && acH <= 1000.0f)) {
+		static uint32_t s_acHLog = 0;
+		if (GetTickCount() - s_acHLog > 2000) { s_acHLog = GetTickCount(); FLog("HP kendaraan lokal di luar batas: %.1f -> dikoreksi (model=%d)", acH, pVehicle->m_pVehicle ? (int)pVehicle->m_pVehicle->GetModelId() : -1); }
+		acH = (acH != acH || acH < 0.0f) ? 0.0f : 1000.0f;
+	}
+	icSync.fCarHealth = acH; }""", 'hp kendaraan keluar (incar)')
+s = patch(s, r'unSync\.fCarHealth = pVehicle->GetHealth\(\);',
+'{ float acH = pVehicle->GetHealth(); if (!(acH >= 0.0f && acH <= 1000.0f)) acH = (acH != acH || acH < 0.0f) ? 0.0f : 1000.0f; unSync.fCarHealth = acH; }', 'hp kendaraan keluar (unoccupied)')
+wr(p, s)
+
+p = S + '/net/remoteplayer.cpp'
+s = rd(p)
+s = patch(s, r'm_pCurrentVehicle->SetHealth\(m_icSync\.fCarHealth\);',
+'{ float acH = m_icSync.fCarHealth; if (!(acH >= 0.0f && acH <= 1000.0f)) { FLog("HP kendaraan pemain %d di luar batas: %.1f", (int)m_PlayerID, acH); acH = (acH != acH || acH < 0.0f) ? 0.0f : 1000.0f; } m_pCurrentVehicle->SetHealth(acH); }', 'hp kendaraan masuk (driver)')
+s = patch(s, r'm_pCurrentVehicle->SetHealth\(picSync->fCarHealth\);',
+'{ float acH = picSync->fCarHealth; if (!(acH >= 0.0f && acH <= 1000.0f)) acH = (acH != acH || acH < 0.0f) ? 0.0f : 1000.0f; m_pCurrentVehicle->SetHealth(acH); }', 'hp kendaraan masuk (penumpang)')
+# 22b. Diagnosa miring kendaraan: catat arah setir PC vs kemiringan matriks yang diterapkan (1x/detik)
+s = patch(s, r'm_icSync\.quat\.GetMatrix\(&matVehicle\);\n',
+"""m_icSync.quat.GetMatrix(&matVehicle);
+			{ static uint32_t s_acRollLog = 0; if (GetTickCount() - s_acRollLog > 1000 && m_icSync.lrAnalog) { s_acRollLog = GetTickCount();
+			  FLog("ROLL pemain=%d model=%d setir=%d right.z=%.3f up.z=%.3f at.z=%.3f", (int)m_PlayerID, m_pCurrentVehicle->m_pVehicle ? (int)m_pCurrentVehicle->m_pVehicle->GetModelId() : -1, (int)(int16_t)m_icSync.lrAnalog, matVehicle.right.z, matVehicle.up.z, matVehicle.at.z); } }
+""", 'diagnosa roll')
+wr(p, s)
+print('OK  v3.5: clamp HP kendaraan + log diagnosa roll')
+
+# ============================================================ BAGIAN 23 (v3.6)
+# Font simbol (Webdings / Wingdings / Wingdings 2,3 / Symbol) untuk material text (stiker).
+# Font dibaca dari folder HP: <files>/fonts/ dan <files>/SAMP/fonts/ (tidak perlu masuk APK).
+# 23a. stb_truetype: terima cmap Microsoft "Symbol" (encoding 0); kode huruf dipetakan ke U+F0xx.
+p = S + '/vendor/imgui/imstb_truetype.h'
+s = rd(p)
+s = patch(s, r'(case STBTT_MS_EID_UNICODE_BMP:\s*case STBTT_MS_EID_UNICODE_FULL:)(\s*// MS/Unicode)',
+          '\\1\n               case 0: /* MS Symbol (Webdings/Wingdings) */\\2', 'stb cmap symbol') if False else s
+s = s.replace('               case STBTT_MS_EID_UNICODE_BMP:\n               case STBTT_MS_EID_UNICODE_FULL:\n                  // MS/Unicode',
+              '               case 0: /* MS Symbol: Webdings/Wingdings */\n               case STBTT_MS_EID_UNICODE_BMP:\n               case STBTT_MS_EID_UNICODE_FULL:\n                  // MS/Unicode', 1)
+if 'MS Symbol: Webdings' not in s:
+    s = s.replace('               case STBTT_MS_EID_UNICODE_BMP:\r\n               case STBTT_MS_EID_UNICODE_FULL:\r\n                  // MS/Unicode',
+                  '               case 0: /* MS Symbol: Webdings/Wingdings */\r\n               case STBTT_MS_EID_UNICODE_BMP:\r\n               case STBTT_MS_EID_UNICODE_FULL:\r\n                  // MS/Unicode', 1)
+assert 'MS Symbol: Webdings' in s, 'stb cmap symbol tidak ketemu'
+wr(p, s)
+
+# 23b. imguiwrapper: muat font simbol dari folder HP ke atlas
+p = S + '/gui/imguiwrapper.cpp'
+s = rd(p)
+SYM = r'''
+#include <dirent.h>
+#include <unordered_map>
+#include <algorithm>
+// ---- ACRO: font simbol untuk material text ----
+std::unordered_map<std::string, ImFont*> g_acroSymFonts;
+static std::string AcroFontKey(const char* n)
+{
+	std::string k;
+	for (; n && *n; ++n) { char c = (char)tolower((unsigned char)*n); if (isalnum((unsigned char)c)) k += c; }
+	size_t pos;
+	while ((pos = k.find("wingdings")) != std::string::npos) k.replace(pos, 9, "wingding");
+	if (k.size() > 3 && k.compare(k.size() - 3, 3, "ttf") == 0) k.erase(k.size() - 3);
+	return k;
+}
+ImFont* AcroFindSymbolFont(const char* name)
+{
+	if (!name || !*name) return nullptr;
+	auto it = g_acroSymFonts.find(AcroFontKey(name));
+	return it == g_acroSymFonts.end() ? nullptr : it->second;
+}
+static void AcroLoadSymbolFonts(ImGuiIO& io)
+{
+	static const ImWchar symRanges[] = { 0x0020, 0x00FF, 0xF020, 0xF0FF, 0 };
+	const char* subdirs[] = { "fonts/", "SAMP/fonts/" };
+	for (const char* sub : subdirs)
+	{
+		std::string dir = std::string(g_pszStorage) + sub;
+		DIR* d = opendir(dir.c_str());
+		if (!d) { FLog("Font simbol: folder tidak ada: %s", dir.c_str()); continue; }
+		while (struct dirent* e = readdir(d))
+		{
+			std::string fn = e->d_name;
+			std::string low = fn; std::transform(low.begin(), low.end(), low.begin(), ::tolower);
+			if (low.size() < 5 || low.compare(low.size() - 4, 4, ".ttf") != 0) continue;
+			if (low.find("webding") == std::string::npos && low.find("wingding") == std::string::npos && low.find("symbol") == std::string::npos) continue;
+			std::string key = AcroFontKey(fn.c_str());
+			if (g_acroSymFonts.count(key)) continue;
+			ImFontConfig cfg; cfg.OversampleH = 1; cfg.OversampleV = 1;
+			ImFont* f = io.Fonts->AddFontFromFileTTF((dir + fn).c_str(), UISettings::fontSize(), &cfg, symRanges);
+			FLog("Font simbol: %s -> kunci '%s' %s", (dir + fn).c_str(), key.c_str(), f ? "OK" : "GAGAL");
+			if (f) g_acroSymFonts[key] = f;
+		}
+		closedir(d);
+	}
+}
+'''
+s = patch(s, r'(bool ImGuiWrapper::initialize\(\))', SYM + '\n\\1', 'sym fonts helper') if False else s
+idx = s.index('bool ImGuiWrapper::initialize()')
+s = s[:idx] + SYM + '\n' + s[idx:]
+s = patch(s, r'(\tcreateFontTexture\(\);\n)', '\tAcroLoadSymbolFonts(io);\n\\1', 'sym fonts load', count=1) if False else s
+assert s.count('\tcreateFontTexture();\n') >= 1
+k = s.index('\tcreateFontTexture();\n', idx)
+s = s[:k] + '\tAcroLoadSymbolFonts(io);\n' + s[k:]
+wr(p, s)
+
+# 23c. renderer: bisa tukar font sementara
+p = S + '/gui/imguirenderer.h'
+s = rd(p)
+assert '\nprivate:\n\t// low-level' in s
+s = s.replace('\nprivate:\n\t// low-level', '\n\tImFont* font() const { return m_font; }\n\tvoid setFont(ImFont* f) { if (f) m_font = f; }\n\nprivate:\n\t// low-level', 1)
+wr(p, s)
+
+# 23d. CObject: simpan nama font per material
+p = S + '/game/object.h'
+s = rd(p)
+assert '\tchar* m_szMaterialText[16];' in s
+s = s.replace('\tchar* m_szMaterialText[16];', '\tchar* m_szMaterialText[16];\n\tchar m_szAcroFont[16][48];', 1)
+wr(p, s)
+p = S + '/game/object.cpp'
+s = rd(p)
+s = patch(s, r'(\tstrcpy\(m_szMaterialText\[index\], text\);)',
+          '\\1\n\tstrncpy(m_szAcroFont[index], fontname ? fontname : "", 47); m_szAcroFont[index][47] = 0;', 'object simpan font') if False else s
+k = s.index('\tstrcpy(m_szMaterialText[index], text);')
+s = s[:k] + '\tstrcpy(m_szMaterialText[index], text);\n\tstrncpy(m_szAcroFont[index], fontname ? fontname : "", 47); m_szAcroFont[index][47] = 0;' + s[k + len('\tstrcpy(m_szMaterialText[index], text);'):]
+k = s.index('\t\t\tm_iMaterialFontSize[i]*=0.75f;')
+s = s[:k] + '\t\t\textern const char* g_acroCurMatFont; g_acroCurMatFont = m_szAcroFont[i];\n' + s[k:]
+wr(p, s)
+
+# 23e. Render: pakai font simbol + ubah ASCII -> U+F0xx
+p = S + '/game/materialtextgenerator.cpp'
+s = rd(p)
+s = s.replace('extern UI* pUI;', 'extern UI* pUI;\nconst char* g_acroCurMatFont = "";\nextern ImFont* AcroFindSymbolFont(const char* name);', 1)
+k = s.index('\t\tconst char* info = infoStr.c_str();')
+s = s[:k] + '''		ImFont* acroSym = AcroFindSymbolFont(g_acroCurMatFont);
+		static std::string s_acroLastFont;
+		if (s_acroLastFont != g_acroCurMatFont) { s_acroLastFont = g_acroCurMatFont; FLog("MaterialText font='%s' simbol=%d", g_acroCurMatFont, acroSym ? 1 : 0); }
+		if (acroSym && text)
+		{
+			std::string u;
+			size_t n = strlen(text);
+			for (size_t i = 0; i < n; ++i)
+			{
+				unsigned char c = (unsigned char)text[i];
+				if (c == '{' && i + 7 < n && text[i + 7] == '}') { u.append(text + i, 8); i += 7; continue; }
+				if (c < 0x20) { u += (char)c; continue; }
+				unsigned cp = 0xF000 + c;
+				u += (char)(0xE0 | (cp >> 12)); u += (char)(0x80 | ((cp >> 6) & 0x3F)); u += (char)(0x80 | (cp & 0x3F));
+			}
+			infoStr = u;
+		}
+		ImFont* acroOldFont = pUI->renderer()->font();
+		if (acroSym) pUI->renderer()->setFont(acroSym);
+		const char* info = infoStr.c_str();''' + s[k + len('\t\tconst char* info = infoStr.c_str();'):]
+k = s.index('\t\tpUI->renderer()->drawText(text_pos, font_color, info, false, font_size);')
+ln = '\t\tpUI->renderer()->drawText(text_pos, font_color, info, false, font_size);'
+s = s[:k] + ln + '\n\t\tpUI->renderer()->setFont(acroOldFont);' + s[k + len(ln):]
+wr(p, s)
+print('OK  v3.6: font simbol (Webdings/Wingdings) dibaca dari folder HP')
