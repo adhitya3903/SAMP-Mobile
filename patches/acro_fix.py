@@ -1839,7 +1839,7 @@ wr(p, s)
 print('OK  damage PC->Android: TakeDamage sekarang terkirim saat pemain lain mengenai pemain lokal')
 
 # ===== BAGIAN 20: crash SIGBUS 32-bit (ReadVector ke field struct packed), loop reload, penanda versi =====
-VERSI = 'v3.6'
+VERSI = 'v3.7'
 
 # 20a. SIGBUS Redmi 6A: ReadVector(float&,float&,float&) dipanggil dengan referensi ke field struct #pragma pack(1)
 #      (vecMoveSpeed). Alamat field bisa tidak sejajar 4-byte, dan instruksi vstr di ARM32 mati (SIGBUS) bila begitu.
@@ -1925,22 +1925,22 @@ p = S + '/net/localplayer.cpp'
 s = rd(p)
 s = patch(s, r'icSync\.fCarHealth = pVehicle->GetHealth\(\);',
 """{ float acH = pVehicle->GetHealth();
-	if (!(acH >= 0.0f && acH <= 1000.0f)) {
+	if (!(acH >= 0.0f && acH <= 5000.0f)) {
 		static uint32_t s_acHLog = 0;
 		if (GetTickCount() - s_acHLog > 2000) { s_acHLog = GetTickCount(); FLog("HP kendaraan lokal di luar batas: %.1f -> dikoreksi (model=%d)", acH, pVehicle->m_pVehicle ? (int)pVehicle->m_pVehicle->GetModelId() : -1); }
 		acH = (acH != acH || acH < 0.0f) ? 0.0f : 1000.0f;
 	}
 	icSync.fCarHealth = acH; }""", 'hp kendaraan keluar (incar)')
 s = patch(s, r'unSync\.fCarHealth = pVehicle->GetHealth\(\);',
-'{ float acH = pVehicle->GetHealth(); if (!(acH >= 0.0f && acH <= 1000.0f)) acH = (acH != acH || acH < 0.0f) ? 0.0f : 1000.0f; unSync.fCarHealth = acH; }', 'hp kendaraan keluar (unoccupied)')
+'{ float acH = pVehicle->GetHealth(); if (!(acH >= 0.0f && acH <= 5000.0f)) acH = (acH != acH || acH < 0.0f) ? 0.0f : 1000.0f; unSync.fCarHealth = acH; }', 'hp kendaraan keluar (unoccupied)')
 wr(p, s)
 
 p = S + '/net/remoteplayer.cpp'
 s = rd(p)
 s = patch(s, r'm_pCurrentVehicle->SetHealth\(m_icSync\.fCarHealth\);',
-'{ float acH = m_icSync.fCarHealth; if (!(acH >= 0.0f && acH <= 1000.0f)) { FLog("HP kendaraan pemain %d di luar batas: %.1f", (int)m_PlayerID, acH); acH = (acH != acH || acH < 0.0f) ? 0.0f : 1000.0f; } m_pCurrentVehicle->SetHealth(acH); }', 'hp kendaraan masuk (driver)')
+'{ float acH = m_icSync.fCarHealth; if (!(acH >= 0.0f && acH <= 5000.0f)) { FLog("HP kendaraan pemain %d di luar batas: %.1f", (int)m_PlayerID, acH); acH = (acH != acH || acH < 0.0f) ? 0.0f : 1000.0f; } m_pCurrentVehicle->SetHealth(acH); }', 'hp kendaraan masuk (driver)')
 s = patch(s, r'm_pCurrentVehicle->SetHealth\(picSync->fCarHealth\);',
-'{ float acH = picSync->fCarHealth; if (!(acH >= 0.0f && acH <= 1000.0f)) acH = (acH != acH || acH < 0.0f) ? 0.0f : 1000.0f; m_pCurrentVehicle->SetHealth(acH); }', 'hp kendaraan masuk (penumpang)')
+'{ float acH = picSync->fCarHealth; if (!(acH >= 0.0f && acH <= 5000.0f)) acH = (acH != acH || acH < 0.0f) ? 0.0f : 1000.0f; m_pCurrentVehicle->SetHealth(acH); }', 'hp kendaraan masuk (penumpang)')
 # 22b. Diagnosa miring kendaraan: catat arah setir PC vs kemiringan matriks yang diterapkan (1x/detik)
 s = patch(s, r'm_icSync\.quat\.GetMatrix\(&matVehicle\);\n',
 """m_icSync.quat.GetMatrix(&matVehicle);
@@ -2078,3 +2078,46 @@ ln = '\t\tpUI->renderer()->drawText(text_pos, font_color, info, false, font_size
 s = s[:k] + ln + '\n\t\tpUI->renderer()->setFont(acroOldFont);' + s[k + len(ln):]
 wr(p, s)
 print('OK  v3.6: font simbol (Webdings/Wingdings) dibaca dari folder HP')
+
+# ============================================================ BAGIAN 24 (v3.7)
+# Font simbol TIDAK boleh ikut atlas utama: atlas membesar -> UV teks chat/UI rusak (teks acak-acakan).
+# Dibuat atlas terpisah + tekstur sendiri; hanya dipakai saat menggambar material text bertema simbol.
+p = S + '/gui/imguiwrapper.cpp'
+s = rd(p)
+assert 'io.Fonts->AddFontFromFileTTF((dir + fn).c_str()' in s
+s = s.replace('io.Fonts->AddFontFromFileTTF((dir + fn).c_str()', 'AcroSymAtlas()->AddFontFromFileTTF((dir + fn).c_str()', 1)
+s = s.replace('static void AcroLoadSymbolFonts(ImGuiIO& io)\n{',
+'''static ImFontAtlas* AcroSymAtlas() { static ImFontAtlas* a = new ImFontAtlas(); return a; }
+static void AcroBuildSymAtlas()
+{
+	ImFontAtlas* a = AcroSymAtlas();
+	if (g_acroSymFonts.empty()) return;
+	unsigned char* pxs; int width, height, bpp;
+	a->GetTexDataAsRGBA32(&pxs, &width, &height, &bpp);
+	RwImage* img = RwImageCreate(width, height, bpp * 8);
+	if (!img) return;
+	RwImageAllocatePixels(img);
+	RwUInt8* px = img->cpPixels;
+	for (int y = 0; y < img->height; y++) { memcpy((void*)px, pxs + img->stride * y, img->stride); px += img->stride; }
+	RwInt32 w, h, d, flags;
+	RwImageFindRasterFormat(img, rwRASTERTYPETEXTURE, &w, &h, &d, &flags);
+	RwRaster* r = RwRasterCreate(w, h, d, flags);
+	if (r) { r = RwRasterSetFromImage(r, img); a->TexID = (ImTextureID)r; FLog("Atlas font simbol: %dx%d", width, height); }
+	RwImageDestroy(img);
+}
+static void AcroLoadSymbolFonts(ImGuiIO& io)
+{''', 1)
+k = s.index('\t\tclosedir(d);\n\t}\n}', s.index('static void AcroLoadSymbolFonts'))
+s = s[:k] + '\t\tclosedir(d);\n\t}\n\tAcroBuildSymAtlas();\n}' + s[k + len('\t\tclosedir(d);\n\t}\n}'):]
+wr(p, s)
+
+p = S + '/game/materialtextgenerator.cpp'
+s = rd(p)
+a = '\t\tif (acroSym) pUI->renderer()->setFont(acroSym);'
+assert a in s
+s = s.replace(a, a + '\n\t\tif (acroSym) ImGui::GetBackgroundDrawList()->PushTextureID(acroSym->ContainerAtlas->TexID);', 1)
+b = '\t\tpUI->renderer()->setFont(acroOldFont);'
+assert b in s
+s = s.replace(b, '\t\tif (acroSym) ImGui::GetBackgroundDrawList()->PopTextureID();\n' + b, 1)
+wr(p, s)
+print('OK  v3.7: font simbol pakai atlas terpisah (teks chat tidak rusak lagi)')
