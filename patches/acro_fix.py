@@ -37,7 +37,7 @@ def patch_keep(s, pat, fn, name, count=1, flags=re.S):
 p = S + '/audiostream.cpp'
 s = rd(p)
 s = patch(s, r'//if \(!BASS_Init\(-1, 44100, 0\)\) return false;[^\n]*',
-          'if (!BASS_Init(-1, 44100, 0, NULL, NULL) && BASS_ErrorGetCode() != 14) '
+          'if (!BASS_Init(-1, 44100, BASS_DEVICE_3D, NULL, NULL) && BASS_ErrorGetCode() != 14) '
           'FLog("BASS_Init gagal: %d", BASS_ErrorGetCode()); // fix: audio stream butuh BASS_Init (14 = sudah aktif)',
           'audio init')
 s = patch(s, r'BASS_ChannelPlay\(bassStream, 0\);',
@@ -1839,7 +1839,7 @@ wr(p, s)
 print('OK  damage PC->Android: TakeDamage sekarang terkirim saat pemain lain mengenai pemain lokal')
 
 # ===== BAGIAN 20: crash SIGBUS 32-bit (ReadVector ke field struct packed), loop reload, penanda versi =====
-VERSI = 'v3.8'
+VERSI = 'v3.9'
 
 # 20a. SIGBUS Redmi 6A: ReadVector(float&,float&,float&) dipanggil dengan referensi ke field struct #pragma pack(1)
 #      (vecMoveSpeed). Alamat field bisa tidak sejajar 4-byte, dan instruksi vstr di ARM32 mati (SIGBUS) bila begitu.
@@ -2156,3 +2156,27 @@ s, n = _re.subn(r'[ \t]*FLog\("MaterialTextGenerator::Generate\d*"\);\r?\n', '',
 assert n >= 5, 'log generate tidak ketemu'
 wr(p, s)
 print('OK  v3.8: memori streaming naik (map hilang), log stiker dibuang')
+
+# ============================================================ BAGIAN 26 (v3.9)
+# 26a. SUARA VOICE: audio stream (musik) menginisialisasi BASS lebih dulu -> BASS_Init milik voice gagal
+#      (error 14 = sudah aktif) -> modul voice menganggap gagal dan tidak pernah memutar suara.
+#      Sekarang: stream memakai flag 3D yang sama, dan voice menerima error 14 sebagai "sudah siap".
+p = S + '/voice_new/Playback.cpp'
+s = rd(p)
+s = patch(s, r'if\(BASS_Init\(-1, SV::kFrequency, BASS_DEVICE_MONO \| BASS_DEVICE_3D, nullptr, nullptr\) == 0\)\n    \{',
+"""if(BASS_Init(-1, SV::kFrequency, BASS_DEVICE_MONO | BASS_DEVICE_3D, nullptr, nullptr) == 0 && BASS_ErrorGetCode() != BASS_ERROR_ALREADY)
+    {
+        FLog("[sv:err] BASS_Init voice gagal: %d", BASS_ErrorGetCode());""", 'voice bass init')
+s = patch(s, r'LogVoice\("\[sv:dbg:playback:bassinithook\] : module loaded"\);',
+          'LogVoice("[sv:dbg:playback:bassinithook] : module loaded"); FLog("[sv] voice playback siap");', 'voice siap log')
+wr(p, s)
+
+# 26b. Diagnosa memori HP di baris STREAM (RAM bebas dari /proc/meminfo) untuk melacak tekstur putih/abu-abu
+p = S + '/game/hooks.cpp'
+s = rd(p)
+k = s.index('FLog("STREAM: terpakai')
+e = s.index('\n', k)
+s = s[:e+1] + """            { FILE* acroMf = fopen("/proc/meminfo", "r"); if (acroMf) { char ln[128]; long acroAvail = -1; while (fgets(ln, sizeof ln, acroMf)) if (sscanf(ln, "MemAvailable: %ld kB", &acroAvail) == 1) break; fclose(acroMf); FLog("MEM: RAM bebas %ld MB", acroAvail / 1024); } }
+""" + s[e+1:]
+wr(p, s)
+print('OK  v3.9: voice BASS_Init, diagnosa RAM')
