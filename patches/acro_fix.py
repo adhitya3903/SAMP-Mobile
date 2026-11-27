@@ -1839,7 +1839,7 @@ wr(p, s)
 print('OK  damage PC->Android: TakeDamage sekarang terkirim saat pemain lain mengenai pemain lokal')
 
 # ===== BAGIAN 20: crash SIGBUS 32-bit (ReadVector ke field struct packed), loop reload, penanda versi =====
-VERSI = 'v3.9'
+VERSI = 'v4.0'
 
 # 20a. SIGBUS Redmi 6A: ReadVector(float&,float&,float&) dipanggil dengan referensi ke field struct #pragma pack(1)
 #      (vecMoveSpeed). Alamat field bisa tidak sejajar 4-byte, dan instruksi vstr di ARM32 mati (SIGBUS) bila begitu.
@@ -2180,3 +2180,39 @@ s = s[:e+1] + """            { FILE* acroMf = fopen("/proc/meminfo", "r"); if (a
 """ + s[e+1:]
 wr(p, s)
 print('OK  v3.9: voice BASS_Init, diagnosa RAM')
+
+# ============================================================ BAGIAN 27 (v4.0)
+# Jarak pandang (far clip) dibatasi: map besar + LOD jauh = berat di GPU Adreno 610 dan tekstur LOD putih.
+# Bisa diatur lewat <files>/SAMP/settings.ini  ->  FarClip=450   (0 = tidak dibatasi). Default 450 m.
+p = S + '/game/hooks.cpp'
+s = rd(p)
+s = patch(s, r'void InstallSpecialHooks\(\)\n\{\n    InjectHooks\(\);\n',
+"""static RwCamera* (*acroRwCameraSetFarClipPlane)(RwCamera*, RwReal) = nullptr;
+static float g_acroFarLimit = 450.0f;
+static RwCamera* acroRwCameraSetFarClipPlane_hook(RwCamera* cam, RwReal farClip)
+{
+    static float s_maxSeen = 0;
+    if (farClip > s_maxSeen) { s_maxSeen = farClip; FLog("FARCLIP: game minta %.0f m (batas client %.0f m)", farClip, g_acroFarLimit); }
+    if (g_acroFarLimit > 0.0f && farClip > g_acroFarLimit) farClip = g_acroFarLimit;
+    return acroRwCameraSetFarClipPlane(cam, farClip);
+}
+
+void InstallSpecialHooks()
+{
+    InjectHooks();
+
+    {
+        char acroPath[256];
+        snprintf(acroPath, sizeof(acroPath), "%sSAMP/settings.ini", g_pszStorage);
+        if (FILE* acroF = fopen(acroPath, "r"))
+        {
+            char ln[160];
+            while (fgets(ln, sizeof ln, acroF)) { float v; if (sscanf(ln, " FarClip = %f", &v) == 1) g_acroFarLimit = v; }
+            fclose(acroF);
+        }
+        FLog("FARCLIP: batas jarak pandang = %.0f m (0 = bebas)", g_acroFarLimit);
+        CHook::InlineHook(g_libGTASA + (VER_x32 ? 0x001D5ACC + 1 : 0x26D034), &acroRwCameraSetFarClipPlane_hook, &acroRwCameraSetFarClipPlane);
+    }
+""", 'far clip hook')
+wr(p, s)
+print('OK  v4.0: batas jarak pandang (FarClip) lewat settings.ini')
