@@ -1839,7 +1839,7 @@ wr(p, s)
 print('OK  damage PC->Android: TakeDamage sekarang terkirim saat pemain lain mengenai pemain lokal')
 
 # ===== BAGIAN 20: crash SIGBUS 32-bit (ReadVector ke field struct packed), loop reload, penanda versi =====
-VERSI = 'v3.7'
+VERSI = 'v3.8'
 
 # 20a. SIGBUS Redmi 6A: ReadVector(float&,float&,float&) dipanggil dengan referensi ke field struct #pragma pack(1)
 #      (vecMoveSpeed). Alamat field bisa tidak sejajar 4-byte, dan instruksi vstr di ARM32 mati (SIGBUS) bila begitu.
@@ -2121,3 +2121,38 @@ assert b in s
 s = s.replace(b, '\t\tif (acroSym) ImGui::GetBackgroundDrawList()->PopTextureID();\n' + b, 1)
 wr(p, s)
 print('OK  v3.7: font simbol pakai atlas terpisah (teks chat tidak rusak lagi)')
+
+# ============================================================ BAGIAN 25 (v3.8)
+# 25a. Memori streaming model cuma 50 MB (lihat log "STREAM: terpakai .. / tersedia 50 MB").
+#      Map berat (GTA Central) membuat game membuang model terus -> bangunan/map hilang & FPS naik-turun.
+#      Dinaikkan sesuai RAM HP: RAM/10, dibatasi 96..384 MB (9T ~ 384 MB, 6A ~ 190 MB).
+p = S + '/game/hooks.cpp'
+s = rd(p)
+s = patch(s, r'void Render2dStuff\(\)\n\{\n',
+"""void Render2dStuff()
+{
+    {
+        static size_t s_acroStreamTarget = 0;
+        if (!s_acroStreamTarget)
+        {
+            size_t total = (size_t)sysconf(_SC_PHYS_PAGES) * (size_t)sysconf(_SC_PAGESIZE);
+            s_acroStreamTarget = total / 10;
+            if (s_acroStreamTarget < (96u << 20)) s_acroStreamTarget = (96u << 20);
+            if (s_acroStreamTarget > (384u << 20)) s_acroStreamTarget = (384u << 20);
+            FLog("STREAM: RAM %zu MB -> batas memori streaming %zu MB", total >> 20, s_acroStreamTarget >> 20);
+        }
+        if (CStreaming::ms_memoryAvailable < s_acroStreamTarget) CStreaming::ms_memoryAvailable = s_acroStreamTarget;
+    }
+""", 'streaming memori naik')
+if '#include <unistd.h>' not in s:
+    s = s.replace('#include "../main.h"', '#include <unistd.h>\n#include "../main.h"', 1)
+wr(p, s)
+
+# 25b. Buang log debug per-langkah di MaterialTextGenerator::Generate (9 baris log per stiker = lambat)
+import re as _re
+p = S + '/game/materialtextgenerator.cpp'
+s = rd(p)
+s, n = _re.subn(r'[ \t]*FLog\("MaterialTextGenerator::Generate\d*"\);\r?\n', '', s)
+assert n >= 5, 'log generate tidak ketemu'
+wr(p, s)
+print('OK  v3.8: memori streaming naik (map hilang), log stiker dibuang')
