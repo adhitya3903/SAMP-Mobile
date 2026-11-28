@@ -1839,7 +1839,7 @@ wr(p, s)
 print('OK  damage PC->Android: TakeDamage sekarang terkirim saat pemain lain mengenai pemain lokal')
 
 # ===== BAGIAN 20: crash SIGBUS 32-bit (ReadVector ke field struct packed), loop reload, penanda versi =====
-VERSI = 'v4.3'
+VERSI = 'v4.4'
 
 # 20a. SIGBUS Redmi 6A: ReadVector(float&,float&,float&) dipanggil dengan referensi ke field struct #pragma pack(1)
 #      (vecMoveSpeed). Alamat field bisa tidak sejajar 4-byte, dan instruksi vstr di ARM32 mati (SIGBUS) bila begitu.
@@ -2288,3 +2288,16 @@ s = patch(s, r'if \(!s_acroStreamOff && CStreaming::ms_memoryAvailable < s_acroS
 """if (!s_acroStreamOff && pNetGame && pNetGame->GetGameState() == GAMESTATE_CONNECTED && CStreaming::ms_memoryAvailable < s_acroStreamTarget) CStreaming::ms_memoryAvailable = s_acroStreamTarget;""", 'streaming naik hanya saat in-game')
 wr(p, s)
 print('OK  v4.3: streaming naik hanya setelah connected')
+
+# ============================================================ BAGIAN 30 (v4.4)
+# PENYEBAB LOADING MACET: pemasangan hook profiler (InlineHook ke CRenderer/CGame/CStreaming/CWorld lewat dlsym,
+# v4.1) menggantung tepat setelah log "FARCLIP: game minta" -> game tidak pernah sampai "Loading AFK icon".
+# Hook tambahan itu dibuang total (profiler cukup memakai pengukur NonRoad yang sudah ada).
+p = S + '/game/hooks.cpp'
+s = rd(p)
+a = s.index('            static void (*fns[7])() = { nullptr, acroProfFn1')
+a = s.rindex('        {\n', 0, a)
+b = s.index('        FLog("FARCLIP: batas jarak pandang')
+s = s[:a] + s[b:]
+wr(p, s)
+print('OK  v4.4: hook profiler yang bikin loading macet dibuang')
