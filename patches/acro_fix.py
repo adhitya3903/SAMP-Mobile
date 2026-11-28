@@ -1839,7 +1839,7 @@ wr(p, s)
 print('OK  damage PC->Android: TakeDamage sekarang terkirim saat pemain lain mengenai pemain lokal')
 
 # ===== BAGIAN 20: crash SIGBUS 32-bit (ReadVector ke field struct packed), loop reload, penanda versi =====
-VERSI = 'v4.9'
+VERSI = 'v4.10'
 
 # 20a. SIGBUS Redmi 6A: ReadVector(float&,float&,float&) dipanggil dengan referensi ke field struct #pragma pack(1)
 #      (vecMoveSpeed). Alamat field bisa tidak sejajar 4-byte, dan instruksi vstr di ARM32 mati (SIGBUS) bila begitu.
@@ -2489,8 +2489,10 @@ s = rd(p)
 s = patch(s, r'int iVersion = 4057;',
 """int iVersion = 4057;
 	{
-		// opsional: NetVersion=4062 di settings.ini (R5 / DL). Default tetap 4057 supaya koneksi yang sekarang jalan tidak berubah.
+		// pilihan launcher "0.3.DL-R1" -> protokol DL (4062); 0.3.7 dan 0.3.7-R5 tetap 4057 (semua revisi 0.3.7 memakai 4057).
+		// NetVersion=4057/4062 di settings.ini masih bisa menimpa.
 		char acroPth[256]; snprintf(acroPth, sizeof acroPth, "%sSAMP/settings.ini", g_pszStorage);
+		if (pSettings && strstr(pSettings->Get().szVersion, "DL")) iVersion = 4062;
 		if (FILE* acroF = fopen(acroPth, "r")) { char ln[160]; int v; while (fgets(ln, sizeof ln, acroF)) if (sscanf(ln, " NetVersion = %d", &v) == 1 && (v == 4057 || v == 4062)) iVersion = v; fclose(acroF); }
 		FLog("NETVERSION: protokol %d, label '%s'", iVersion, pSettings ? pSettings->Get().szVersion : SAMP_VERSION);
 	}""", 'net version opsional')
