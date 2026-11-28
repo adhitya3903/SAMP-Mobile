@@ -1839,7 +1839,7 @@ wr(p, s)
 print('OK  damage PC->Android: TakeDamage sekarang terkirim saat pemain lain mengenai pemain lokal')
 
 # ===== BAGIAN 20: crash SIGBUS 32-bit (ReadVector ke field struct packed), loop reload, penanda versi =====
-VERSI = 'v4.10'
+VERSI = 'v4.11'
 
 # 20a. SIGBUS Redmi 6A: ReadVector(float&,float&,float&) dipanggil dengan referensi ke field struct #pragma pack(1)
 #      (vecMoveSpeed). Alamat field bisa tidak sejajar 4-byte, dan instruksi vstr di ARM32 mati (SIGBUS) bila begitu.
@@ -2498,3 +2498,26 @@ s = patch(s, r'int iVersion = 4057;',
 	}""", 'net version opsional')
 wr(p, s)
 print('OK  v4.9: simbol libsamp diekspor (nama fungsi di log sampler), NetVersion opsional')
+
+# ============================================================ BAGIAN 36 (v4.11)
+# Diagnosa voice: di log v4.6-v4.10 tidak pernah muncul "serverInfo" maupun "keepalive UDP" -> client mengirim ConnectPacket
+# di ClientJoin, tetapi balasan sampvoice (paket id 222) tidak pernah diproses. Catat tiap paket 222 yang masuk (tipe+panjang)
+# dan alasan serverInfo ditolak, supaya jelas: server tidak membalas, atau balasannya ditolak client.
+p = S + '/net/netgame.cpp'
+s = rd(p)
+s = patch(s, r'case Network::kRaknetPacketId: \{\n\s*Network::OnRaknetReceive\(pkt\);',
+"""case Network::kRaknetPacketId: {
+                { static int s_acroV = 0; if (s_acroV++ < 20) FLog("[sv] paket 222 masuk, panjang=%u", (unsigned)pkt->length); }
+                Network::OnRaknetReceive(pkt);""", 'voice diag 222')
+wr(p, s)
+p = S + '/voice_new/Network.cpp'
+s = rd(p)
+s = patch(s, r'(bs\.Read\(controlPacketPtr->length\);\n)',
+"""bs.Read(controlPacketPtr->length);
+    { static int s_acroC = 0; if (s_acroC++ < 30) FLog("[sv] kontrol paket tipe=%d panjang=%d", (int)controlPacketPtr->packet, (int)controlPacketPtr->length); }
+""", 'voice diag ctrl')
+s = patch(s, r'(const auto& stData = \*reinterpret_cast<SV::ServerInfoPacket\*>\(controlPacketPtr->data\);\n\s*)if\(controlPacketPtr->length != sizeof\(stData\)\) return false;',
+"""const auto& stData = *reinterpret_cast<SV::ServerInfoPacket*>(controlPacketPtr->data);
+            if(controlPacketPtr->length != sizeof(stData)) { FLog("[sv:err] serverInfo ditolak: panjang %d, seharusnya %d", (int)controlPacketPtr->length, (int)sizeof(stData)); return false; }""", 'voice diag serverinfo len')
+wr(p, s)
+print('OK  v4.11: diagnosa paket voice (222 / serverInfo)')
