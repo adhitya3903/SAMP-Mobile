@@ -1839,7 +1839,7 @@ wr(p, s)
 print('OK  damage PC->Android: TakeDamage sekarang terkirim saat pemain lain mengenai pemain lokal')
 
 # ===== BAGIAN 20: crash SIGBUS 32-bit (ReadVector ke field struct packed), loop reload, penanda versi =====
-VERSI = 'v4.6'
+VERSI = 'v4.7'
 
 # 20a. SIGBUS Redmi 6A: ReadVector(float&,float&,float&) dipanggil dengan referensi ke field struct #pragma pack(1)
 #      (vecMoveSpeed). Alamat field bisa tidak sejajar 4-byte, dan instruksi vstr di ARM32 mati (SIGBUS) bila begitu.
@@ -2348,3 +2348,34 @@ s = patch(s, r'if \(s_acroStreamTarget > \(384u << 20\)\) s_acroStreamTarget = \
           'if (s_acroStreamTarget > (192u << 20)) s_acroStreamTarget = (192u << 20);', 'streaming default maks 192')
 wr(p, s)
 print('OK  v4.6: batas streaming default 96..192 MB')
+
+# ============================================================ BAGIAN 33 (v4.7)
+# PENYEBAB LAG SAAT RAMAI (log v4.6, server UIF /ds1): CStreaming::TryLoadModel memblokir game thread.
+# Setelah RequestModel + LoadAllRequestedModels, bila model belum siap ia tidur 100 ms per putaran. Tiap skin/kendaraan
+# pemain baru yang muncul (CRemotePlayer::Spawn) yang modelnya belum dimuat = minimal 100 ms game membeku
+# (62 kali di log 3,5 menit; tiap putaran juga menulis 5 baris log). Sekarang: cek tiap 3 ms (batas total tetap 3 dtk), log dibuang.
+p = S + '/game/Streaming.cpp'
+s = rd(p)
+a = s.index('bool CStreaming::TryLoadModel(int modelId) {')
+b = s.index('// Finishes loading all channels.')
+s = s[:a] + """bool CStreaming::TryLoadModel(int modelId) {
+    if(!CStreaming::GetInfo(modelId).IsLoaded()) {
+        CStreaming::RequestModel(modelId, STREAMING_GAME_REQUIRED | STREAMING_KEEP_IN_MEMORY);
+        CStreaming::LoadAllRequestedModels(false);
+        uint32 count = 0;
+        while (!CStreaming::GetInfo(modelId).IsLoaded()) {
+            count++;
+            std::this_thread::sleep_for(std::chrono::milliseconds(3));
+
+            if (count > 1000) { // total tunggu maks ~3 dtk seperti dulu (30 x 100 ms)
+                pUI->chat()->addDebugMessage("{ff0000} Error loading model %d", modelId);
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+""" + s[b:]
+wr(p, s)
+print('OK  v4.7: TryLoadModel tidak lagi tidur 100 ms per putaran')
