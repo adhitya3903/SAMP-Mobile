@@ -1839,7 +1839,7 @@ wr(p, s)
 print('OK  damage PC->Android: TakeDamage sekarang terkirim saat pemain lain mengenai pemain lokal')
 
 # ===== BAGIAN 20: crash SIGBUS 32-bit (ReadVector ke field struct packed), loop reload, penanda versi =====
-VERSI = 'v4.1'
+VERSI = 'v4.2'
 
 # 20a. SIGBUS Redmi 6A: ReadVector(float&,float&,float&) dipanggil dengan referensi ke field struct #pragma pack(1)
 #      (vecMoveSpeed). Alamat field bisa tidak sejajar 4-byte, dan instruksi vstr di ARM32 mati (SIGBUS) bila begitu.
@@ -2133,15 +2133,18 @@ s = patch(s, r'void Render2dStuff\(\)\n\{\n',
 {
     {
         static size_t s_acroStreamTarget = 0;
+        static bool s_acroStreamOff = false;
         if (!s_acroStreamTarget)
         {
             size_t total = (size_t)sysconf(_SC_PHYS_PAGES) * (size_t)sysconf(_SC_PAGESIZE);
             s_acroStreamTarget = total / 10;
             if (s_acroStreamTarget < (96u << 20)) s_acroStreamTarget = (96u << 20);
             if (s_acroStreamTarget > (384u << 20)) s_acroStreamTarget = (384u << 20);
-            FLog("STREAM: RAM %zu MB -> batas memori streaming %zu MB", total >> 20, s_acroStreamTarget >> 20);
+            { char pth[256]; snprintf(pth, sizeof pth, "%sSAMP/settings.ini", g_pszStorage);
+              if (FILE* f = fopen(pth, "r")) { char ln[160]; int v; while (fgets(ln, sizeof ln, f)) if (sscanf(ln, " StreamMB = %d", &v) == 1) { s_acroStreamOff = (v <= 0); if (v > 0) s_acroStreamTarget = (size_t)v << 20; } fclose(f); } }
+            FLog("STREAM: RAM %zu MB -> batas memori streaming %zu MB%s", total >> 20, s_acroStreamTarget >> 20, s_acroStreamOff ? " (DIMATIKAN lewat settings.ini)" : "");
         }
-        if (CStreaming::ms_memoryAvailable < s_acroStreamTarget) CStreaming::ms_memoryAvailable = s_acroStreamTarget;
+        if (!s_acroStreamOff && CStreaming::ms_memoryAvailable < s_acroStreamTarget) CStreaming::ms_memoryAvailable = s_acroStreamTarget;
     }
 """, 'streaming memori naik')
 if '#include <unistd.h>' not in s:
