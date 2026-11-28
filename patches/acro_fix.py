@@ -1839,7 +1839,7 @@ wr(p, s)
 print('OK  damage PC->Android: TakeDamage sekarang terkirim saat pemain lain mengenai pemain lokal')
 
 # ===== BAGIAN 20: crash SIGBUS 32-bit (ReadVector ke field struct packed), loop reload, penanda versi =====
-VERSI = 'v4.7'
+VERSI = 'v4.8'
 
 # 20a. SIGBUS Redmi 6A: ReadVector(float&,float&,float&) dipanggil dengan referensi ke field struct #pragma pack(1)
 #      (vecMoveSpeed). Alamat field bisa tidak sejajar 4-byte, dan instruksi vstr di ARM32 mati (SIGBUS) bila begitu.
@@ -2379,3 +2379,91 @@ s = s[:a] + """bool CStreaming::TryLoadModel(int modelId) {
 """ + s[b:]
 wr(p, s)
 print('OK  v4.7: TryLoadModel tidak lagi tidur 100 ms per putaran')
+
+# ============================================================ BAGIAN 34 (v4.8)
+# Log v4.7: drop 10 FPS (100 ms/frame, CPU render 80%) terjadi stabil TANPA ada pemain/kendaraan baru muncul, dan HUD+UI+NET
+# hanya ~8 ms. Jadi 90 ms habis di kode game/driver. Pemasangan hook profiler dulu menggantung, jadi di sini dipakai
+# SAMPLING (tanpa hook): timer POSIX 4 ms mengirim SIGPROF ke thread render, handler hanya mencatat PC; tiap 5 dtk PC
+# dikelompokkan per library dan per fungsi (dladdr) -> baris "SAMPEL lib:" dan "SAMPEL fungsi:" di log.
+p = S + '/game/hooks.cpp'
+s = rd(p)
+SAMP = """#include <signal.h>
+#include <thread>
+#include <ucontext.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#include <map>
+#include <string>
+#include <algorithm>
+#include <vector>
+static volatile uintptr_t g_acroSamp[4096];
+static volatile int g_acroSampN = 0;
+static void acroSampHandler(int, siginfo_t*, void* ucv)
+{
+    ucontext_t* uc = (ucontext_t*)ucv;
+#if defined(__aarch64__)
+    uintptr_t pc = (uintptr_t)uc->uc_mcontext.pc;
+#else
+    uintptr_t pc = (uintptr_t)uc->uc_mcontext.arm_pc;
+#endif
+    int n = g_acroSampN;
+    if (n < 4096) { g_acroSamp[n] = pc; g_acroSampN = n + 1; }
+}
+static void acroSampStart()
+{
+    struct sigaction sa; memset(&sa, 0, sizeof sa);
+    sa.sa_sigaction = acroSampHandler; sa.sa_flags = SA_SIGINFO | SA_RESTART;
+    sigaction(SIGPROF, &sa, nullptr);
+    pid_t tid = (pid_t)syscall(__NR_gettid), pidv = getpid();
+    std::thread([pidv, tid]() {
+        // thread pengirim: tiap 4 ms kirim SIGPROF ke thread render (tanpa timer_create agar aman di semua API level)
+        for (;;) { usleep(4000); syscall(__NR_tgkill, pidv, tid, SIGPROF); }
+    }).detach();
+    FLog("SAMPEL: sampler PC thread render aktif (4 ms)");
+}
+static void acroSampReport()
+{
+    int n = g_acroSampN; if (n > 4096) n = 4096;
+    static uintptr_t snap[4096];
+    for (int i = 0; i < n; i++) snap[i] = g_acroSamp[i];
+    g_acroSampN = 0;
+    if (n < 20) return;
+    std::map<std::string, int> libs, funcs;
+    for (int i = 0; i < n; i++)
+    {
+        Dl_info di; memset(&di, 0, sizeof di);
+        std::string lib = "?", fn;
+        if (dladdr((void*)snap[i], &di) && di.dli_fname)
+        {
+            const char* b = strrchr(di.dli_fname, '/'); lib = b ? b + 1 : di.dli_fname;
+            char tmp[160];
+            if (di.dli_sname) snprintf(tmp, sizeof tmp, "%s!%s+0x%lx", lib.c_str(), di.dli_sname, (unsigned long)(snap[i] - (uintptr_t)di.dli_saddr));
+            else snprintf(tmp, sizeof tmp, "%s+0x%lx", lib.c_str(), (unsigned long)((snap[i] - (uintptr_t)di.dli_fbase) & ~0xFFFul));
+            fn = tmp;
+            if (di.dli_sname) { snprintf(tmp, sizeof tmp, "%s!%s", lib.c_str(), di.dli_sname); fn = tmp; }
+        }
+        else { char tmp[40]; snprintf(tmp, sizeof tmp, "?0x%lx", (unsigned long)(snap[i] & ~0xFFFFul)); fn = tmp; }
+        libs[lib]++; funcs[fn]++;
+    }
+    auto top = [&](std::map<std::string, int>& m, const char* tag, int cnt) {
+        std::vector<std::pair<int, std::string>> v;
+        for (auto& kv : m) v.push_back({ kv.second, kv.first });
+        std::sort(v.begin(), v.end(), [](const std::pair<int, std::string>& a, const std::pair<int, std::string>& b) { return a.first > b.first; });
+        char ln[512]; int l = snprintf(ln, sizeof ln, "%s n=%d:", tag, n);
+        for (int i = 0; i < (int)v.size() && i < cnt; i++) l += snprintf(ln + l, sizeof ln - l, " %s=%d%%", v[i].second.c_str(), v[i].first * 100 / n);
+        FLog("%s", ln);
+    };
+    top(libs, "SAMPEL lib", 6);
+    top(funcs, "SAMPEL fungsi", 7);
+}
+void Render2dStuff()
+{
+    static bool s_acroSampOn = false;
+    if (!s_acroSampOn) { s_acroSampOn = true; acroSampStart(); }
+"""
+s = patch(s, r'\nvoid Render2dStuff\(\)\n\{\n', '\n' + SAMP, 'sampler define')
+s = patch(s, r'(FLog\("%s", fb\);\n            \})\n', 'FLog("%s", fb);\n                acroSampReport();\n            }\n', 'sampler report')
+if '#include <dlfcn.h>' not in s:
+    s = '#include <dlfcn.h>\n#include <errno.h>\n#include <string.h>\n' + s
+wr(p, s)
+print('OK  v4.8: sampler PC thread render (tanpa hook)')
