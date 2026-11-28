@@ -1839,7 +1839,7 @@ wr(p, s)
 print('OK  damage PC->Android: TakeDamage sekarang terkirim saat pemain lain mengenai pemain lokal')
 
 # ===== BAGIAN 20: crash SIGBUS 32-bit (ReadVector ke field struct packed), loop reload, penanda versi =====
-VERSI = 'v4.2'
+VERSI = 'v4.3'
 
 # 20a. SIGBUS Redmi 6A: ReadVector(float&,float&,float&) dipanggil dengan referensi ke field struct #pragma pack(1)
 #      (vecMoveSpeed). Alamat field bisa tidak sejajar 4-byte, dan instruksi vstr di ARM32 mati (SIGBUS) bila begitu.
@@ -2278,3 +2278,13 @@ if '#include <errno.h>' not in s:
     s = '#include <errno.h>\n' + s
 wr(p, s)
 print('OK  v4.1: profiler render, log voice keepalive, StaticShadows default ON')
+
+# ============================================================ BAGIAN 29 (v4.3)
+# Loading screen jangan diberati: batas memori streaming baru dinaikkan SETELAH pemain masuk server
+# (GAMESTATE_CONNECTED). Saat loading nilai asli game (50 MB) tetap dipakai -> loading cepat seperti dulu.
+p = S + '/game/hooks.cpp'
+s = rd(p)
+s = patch(s, r'if \(!s_acroStreamOff && CStreaming::ms_memoryAvailable < s_acroStreamTarget\) CStreaming::ms_memoryAvailable = s_acroStreamTarget;',
+"""if (!s_acroStreamOff && pNetGame && pNetGame->GetGameState() == GAMESTATE_CONNECTED && CStreaming::ms_memoryAvailable < s_acroStreamTarget) CStreaming::ms_memoryAvailable = s_acroStreamTarget;""", 'streaming naik hanya saat in-game')
+wr(p, s)
+print('OK  v4.3: streaming naik hanya setelah connected')
