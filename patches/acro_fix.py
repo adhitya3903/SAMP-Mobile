@@ -1839,7 +1839,7 @@ wr(p, s)
 print('OK  damage PC->Android: TakeDamage sekarang terkirim saat pemain lain mengenai pemain lokal')
 
 # ===== BAGIAN 20: crash SIGBUS 32-bit (ReadVector ke field struct packed), loop reload, penanda versi =====
-VERSI = 'v4.5'
+VERSI = 'v4.6'
 
 # 20a. SIGBUS Redmi 6A: ReadVector(float&,float&,float&) dipanggil dengan referensi ke field struct #pragma pack(1)
 #      (vecMoveSpeed). Alamat field bisa tidak sejajar 4-byte, dan instruksi vstr di ARM32 mati (SIGBUS) bila begitu.
@@ -2336,3 +2336,15 @@ s = s[:e+1] + """            {
 """ + s[e+1:]
 wr(p, s)
 print('OK  v4.5: diagnosa termal/CPU/GPU')
+
+# ============================================================ BAGIAN 32 (v4.6)
+# Bukti dari log v4.5 (9T, GTA Central, StreamMB=0): tiap kali memori streaming terpakai mendekati batas 50 MB
+# (>= 45 MB) frame rata-rata 95 ms dan CPU thread render 83% (game membuang + memuat ulang model terus -> hitch);
+# di bawah 45 MB rata-rata 29 ms. Jadi batas 50 MB memang terlalu kecil untuk map berat.
+# Default sekarang: RAM/10 dibatasi 96..192 MB (bukan 384 MB yang dulu dicurigai), tetap hanya setelah connected.
+p = S + '/game/hooks.cpp'
+s = rd(p)
+s = patch(s, r'if \(s_acroStreamTarget > \(384u << 20\)\) s_acroStreamTarget = \(384u << 20\);',
+          'if (s_acroStreamTarget > (192u << 20)) s_acroStreamTarget = (192u << 20);', 'streaming default maks 192')
+wr(p, s)
+print('OK  v4.6: batas streaming default 96..192 MB')
