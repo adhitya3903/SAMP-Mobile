@@ -1839,7 +1839,7 @@ wr(p, s)
 print('OK  damage PC->Android: TakeDamage sekarang terkirim saat pemain lain mengenai pemain lokal')
 
 # ===== BAGIAN 20: crash SIGBUS 32-bit (ReadVector ke field struct packed), loop reload, penanda versi =====
-VERSI = 'v4.8'
+VERSI = 'v4.9'
 
 # 20a. SIGBUS Redmi 6A: ReadVector(float&,float&,float&) dipanggil dengan referensi ke field struct #pragma pack(1)
 #      (vecMoveSpeed). Alamat field bisa tidak sejajar 4-byte, dan instruksi vstr di ARM32 mati (SIGBUS) bila begitu.
@@ -2417,9 +2417,9 @@ static void acroSampStart()
     pid_t tid = (pid_t)syscall(__NR_gettid), pidv = getpid();
     std::thread([pidv, tid]() {
         // thread pengirim: tiap 4 ms kirim SIGPROF ke thread render (tanpa timer_create agar aman di semua API level)
-        for (;;) { usleep(4000); syscall(__NR_tgkill, pidv, tid, SIGPROF); }
+        for (;;) { usleep(8000); syscall(__NR_tgkill, pidv, tid, SIGPROF); }
     }).detach();
-    FLog("SAMPEL: sampler PC thread render aktif (4 ms)");
+    FLog("SAMPEL: sampler PC thread render aktif (8 ms)");
 }
 static void acroSampReport()
 {
@@ -2467,3 +2467,32 @@ if '#include <dlfcn.h>' not in s:
     s = '#include <dlfcn.h>\n#include <errno.h>\n#include <string.h>\n' + s
 wr(p, s)
 print('OK  v4.8: sampler PC thread render (tanpa hook)')
+
+# ============================================================ BAGIAN 35 (v4.9)
+# 35a. Log v4.8: saat FPS jatuh ke 5-8 FPS, 60-68% waktu thread render ada di libsamp.so (kode client sendiri), terpusat di 2 titik
+#      (offset ~0x134000 dan ~0x17e000). libsamp di-strip dan visibility hidden sehingga dladdr tidak bisa memberi nama.
+#      Sekarang simbol diekspor (visibility default, tanpa -s) supaya baris "SAMPEL fungsi" menyebut nama fungsinya.
+p = S + '/CMakeLists.txt'
+with open(p, encoding='utf-8', newline='') as f:
+    s = f.read()
+old = '-w -s -g -fvisibility=hidden'
+assert s.count(old) == 1, 'PATCH GAGAL [cmake flags]'
+s = s.replace(old, '-w -g -fvisibility=default')
+with open(p, 'w', encoding='utf-8', newline='') as f:
+    f.write(s)
+
+# 35b. Versi protokol: client SELALU mengirim NETGAME_VERSION 4057 (protokol 0.3.7-R1), hanya label string-nya yang diubah
+#      (settings.ini version=...). Server (open.mp) membaca nomor itu, jadi 0.3.DL / R5 tidak terdeteksi walau labelnya benar.
+#      Opsional (default tidak berubah): settings.ini  NetVersion=4062  -> kirim 4062 (protokol 0.3.7-R5 / 0.3.DL-R1).
+p = S + '/net/netgame.cpp'
+s = rd(p)
+s = patch(s, r'int iVersion = 4057;',
+"""int iVersion = 4057;
+	{
+		// opsional: NetVersion=4062 di settings.ini (R5 / DL). Default tetap 4057 supaya koneksi yang sekarang jalan tidak berubah.
+		char acroPth[256]; snprintf(acroPth, sizeof acroPth, "%sSAMP/settings.ini", g_pszStorage);
+		if (FILE* acroF = fopen(acroPth, "r")) { char ln[160]; int v; while (fgets(ln, sizeof ln, acroF)) if (sscanf(ln, " NetVersion = %d", &v) == 1 && (v == 4057 || v == 4062)) iVersion = v; fclose(acroF); }
+		FLog("NETVERSION: protokol %d, label '%s'", iVersion, pSettings ? pSettings->Get().szVersion : SAMP_VERSION);
+	}""", 'net version opsional')
+wr(p, s)
+print('OK  v4.9: simbol libsamp diekspor (nama fungsi di log sampler), NetVersion opsional')
