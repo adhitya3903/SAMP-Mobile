@@ -1569,7 +1569,7 @@ s = patch_keep(s, r'(\tbool bPassengerUseTexture;)', lambda m: '\tbool bStaticSh
 wr(p, s)
 p = S + '/settings.cpp'
 s = rd(p)
-s = patch_keep(s, r'(\tm_Settings\.bPassengerUseTexture = )', lambda m: '\tm_Settings.bStaticShadows = reader.GetBoolean("gui", "StaticShadows", false);\n' + m.group(1), 'settings.cpp StaticShadows')
+s = patch_keep(s, r'(\tm_Settings\.bPassengerUseTexture = )', lambda m: '\tm_Settings.bStaticShadows = reader.GetBoolean("gui", "StaticShadows", true);\n' + m.group(1), 'settings.cpp StaticShadows')
 wr(p, s)
 
 # 15. Tombol voice digeser ~1% ke kiri (500 -> 493.6 dari lebar basis 640)
@@ -1839,7 +1839,7 @@ wr(p, s)
 print('OK  damage PC->Android: TakeDamage sekarang terkirim saat pemain lain mengenai pemain lokal')
 
 # ===== BAGIAN 20: crash SIGBUS 32-bit (ReadVector ke field struct packed), loop reload, penanda versi =====
-VERSI = 'v4.0'
+VERSI = 'v4.1'
 
 # 20a. SIGBUS Redmi 6A: ReadVector(float&,float&,float&) dipanggil dengan referensi ke field struct #pragma pack(1)
 #      (vecMoveSpeed). Alamat field bisa tidak sejajar 4-byte, dan instruksi vstr di ARM32 mati (SIGBUS) bila begitu.
@@ -2216,3 +2216,62 @@ void InstallSpecialHooks()
 """, 'far clip hook')
 wr(p, s)
 print('OK  v4.0: batas jarak pandang (FarClip) lewat settings.ini')
+
+# ============================================================ BAGIAN 28 (v4.1)
+# 28a. Profiler render: ukur waktu fungsi-fungsi berat game per 5 detik (baris "RENDER 5dtk: ..." di log).
+#      Supaya terlihat apa yang makan ~40 ms/frame (HUD+UI+NET hanya ~5 ms).
+p = S + '/game/hooks.cpp'
+s = rd(p)
+s = patch(s, r'void Render2dStuff\(\)\n\{\n',
+'''#include <time.h>
+#include <dlfcn.h>
+struct AcroProfSlot { const char* name; double ms; int calls; void* orig; };
+static AcroProfSlot g_acroProf[7] = { {"NonRoad"}, {"RoadsBld"}, {"RenderList"}, {"PreRender"}, {"GameProc"}, {"Streaming"}, {"WorldProc"} };
+static inline double acroNow() { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6; }
+#define ACRO_PROF_FN(I) static void acroProfFn##I() { double t = acroNow(); ((void(*)())g_acroProf[I].orig)(); g_acroProf[I].ms += acroNow() - t; g_acroProf[I].calls++; }
+ACRO_PROF_FN(1) ACRO_PROF_FN(2) ACRO_PROF_FN(3) ACRO_PROF_FN(4) ACRO_PROF_FN(5) ACRO_PROF_FN(6)
+void Render2dStuff()
+{
+''', 'profiler struct')
+s = patch(s, r'\n\tCRenderer_RenderEverythingBarRoads\(\);\n',
+"""
+	{ double acroT = acroNow(); CRenderer_RenderEverythingBarRoads(); g_acroProf[0].ms += acroNow() - acroT; g_acroProf[0].calls++; }
+""", 'profiler nonroad')
+# pasang hook tambahan (dlsym, dilewati kalau simbol tidak ada)
+s = patch(s, r'        FLog\("FARCLIP: batas jarak pandang',
+"""        {
+            static void (*fns[7])() = { nullptr, acroProfFn1, acroProfFn2, acroProfFn3, acroProfFn4, acroProfFn5, acroProfFn6 };
+            static const char* syms[7] = { nullptr, "_ZN9CRenderer21RenderRoadsAndBuildingsEv", "_ZN9CRenderer13ConstructRenderListEv",
+                "_ZN9CRenderer9PreRenderEv", "_ZN5CGame7ProcessEv", "_ZN10CStreaming6UpdateEv", "_ZN6CWorld7ProcessEv" };
+            for (int i = 1; i < 7; i++)
+            {
+                void* a = dlsym(CHook::lib, syms[i]);
+                if (a) CHook::InlineHook((uintptr_t)a, fns[i], (void**)&g_acroProf[i].orig);
+                FLog("PROFIL render: %s %s", syms[i], a ? "dipasang" : "TIDAK ADA");
+            }
+        }
+        FLog("FARCLIP: batas jarak pandang""", 'profiler pasang')
+# cetak tiap 5 detik di samping baris MEM
+k = s.index('FLog("MEM: RAM bebas')
+e = s.index('\n', k)
+s = s[:e+1] + """            { char rb[256]; int n = snprintf(rb, sizeof rb, "RENDER 5dtk:");
+              for (int i = 0; i < 7; i++) { if (g_acroProf[i].calls) n += snprintf(rb + n, sizeof rb - n, " %s=%.0fms/%dx", g_acroProf[i].name, g_acroProf[i].ms, g_acroProf[i].calls); g_acroProf[i].ms = 0; g_acroProf[i].calls = 0; }
+              FLog("%s", rb); }
+""" + s[e+1:]
+wr(p, s)
+
+# 28b. Voice: catat kiriman keepalive UDP & tidak adanya pluginInit (server tidak membalas)
+p = S + '/voice_new/Network.cpp'
+s = rd(p)
+s = patch(s, r'send\(Network::socketHandle, reinterpret_cast<const char \*>\(&keepAlivePacket\),\n\s*sizeof\(keepAlivePacket\), NULL\);',
+"""{
+                static int s_acroKa = 0;
+                const auto kaRes = send(Network::socketHandle, reinterpret_cast<const char *>(&keepAlivePacket), sizeof(keepAlivePacket), NULL);
+                if (s_acroKa < 3 || (curStatus != ConnectionStatus::Connected && (s_acroKa % 20) == 0))
+                    FLog("[sv] keepalive UDP #%d hasil=%d errno=%d status=%d (belum Connected = server belum membalas pluginInit)", s_acroKa, (int)kaRes, kaRes < 0 ? errno : 0, (int)curStatus);
+                s_acroKa++;
+            }""", 'voice keepalive log')
+if '#include <errno.h>' not in s:
+    s = '#include <errno.h>\n' + s
+wr(p, s)
+print('OK  v4.1: profiler render, log voice keepalive, StaticShadows default ON')
