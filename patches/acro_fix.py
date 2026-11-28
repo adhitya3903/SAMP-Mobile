@@ -1839,7 +1839,7 @@ wr(p, s)
 print('OK  damage PC->Android: TakeDamage sekarang terkirim saat pemain lain mengenai pemain lokal')
 
 # ===== BAGIAN 20: crash SIGBUS 32-bit (ReadVector ke field struct packed), loop reload, penanda versi =====
-VERSI = 'v4.4'
+VERSI = 'v4.5'
 
 # 20a. SIGBUS Redmi 6A: ReadVector(float&,float&,float&) dipanggil dengan referensi ke field struct #pragma pack(1)
 #      (vecMoveSpeed). Alamat field bisa tidak sejajar 4-byte, dan instruksi vstr di ARM32 mati (SIGBUS) bila begitu.
@@ -2301,3 +2301,38 @@ b = s.index('        FLog("FARCLIP: batas jarak pandang')
 s = s[:a] + s[b:]
 wr(p, s)
 print('OK  v4.4: hook profiler yang bikin loading macet dibuang')
+
+# ============================================================ BAGIAN 31 (v4.5)
+# Diagnosa FPS rendah: apakah CPU-bound, GPU-bound, atau HP kepanasan (throttle)?
+# Tiap 5 detik catat: waktu CPU thread render vs waktu dinding, suhu zona termal, frekuensi tiap core CPU, clock/beban GPU Adreno.
+p = S + '/game/hooks.cpp'
+s = rd(p)
+k = s.index('FLog("MEM: RAM bebas')
+e = s.index('\n', k)
+s = s[:e+1] + """            {
+                static double acroCpuPrev = 0, acroWallPrev = 0;
+                struct timespec ct, wt; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ct); clock_gettime(CLOCK_MONOTONIC, &wt);
+                double cpuMs = ct.tv_sec * 1000.0 + ct.tv_nsec / 1e6, wallMs = wt.tv_sec * 1000.0 + wt.tv_nsec / 1e6;
+                char tb[512]; int tn = snprintf(tb, sizeof tb, "TERMAL: CPU thread render %.0f%% dari waktu dinding |", acroWallPrev > 0 ? (cpuMs - acroCpuPrev) * 100.0 / (wallMs - acroWallPrev) : 0.0);
+                acroCpuPrev = cpuMs; acroWallPrev = wallMs;
+                for (int z = 0; z < 40 && tn < 300; z++) {
+                    char pa[96], ty[40] = "", tv[24] = "";
+                    snprintf(pa, sizeof pa, "/sys/class/thermal/thermal_zone%d/type", z);
+                    FILE* f = fopen(pa, "r"); if (!f) continue; if (fgets(ty, sizeof ty, f)) {} fclose(f);
+                    snprintf(pa, sizeof pa, "/sys/class/thermal/thermal_zone%d/temp", z);
+                    f = fopen(pa, "r"); if (!f) continue; if (fgets(tv, sizeof tv, f)) {} fclose(f);
+                    ty[strcspn(ty, "\\n")] = 0; long t = atol(tv); if (t > 1000) t /= 1000;
+                    if (strstr(ty, "cpu") || strstr(ty, "gpu") || strstr(ty, "battery") || strstr(ty, "skin") || strstr(ty, "xo")) tn += snprintf(tb + tn, sizeof tb - tn, " %s=%ldC", ty, t);
+                }
+                FLog("%s", tb);
+                char fb[256]; int fn = snprintf(fb, sizeof fb, "FREKUENSI MHz:");
+                for (int c = 0; c < 8; c++) { char pa[96], v[24] = ""; snprintf(pa, sizeof pa, "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_cur_freq", c);
+                    FILE* f = fopen(pa, "r"); if (!f) continue; if (fgets(v, sizeof v, f)) {} fclose(f); fn += snprintf(fb + fn, sizeof fb - fn, " c%d=%ld", c, atol(v) / 1000); }
+                { const char* gp[] = { "/sys/class/kgsl/kgsl-3d0/gpuclk", "/sys/class/kgsl/kgsl-3d0/devfreq/cur_freq", "/sys/class/kgsl/kgsl-3d0/gpu_busy_percentage" };
+                  const char* gn[] = { "gpuclk", "gpufreq", "gpubusy" };
+                  for (int g = 0; g < 3; g++) { char v[40] = ""; FILE* f = fopen(gp[g], "r"); if (!f) continue; if (fgets(v, sizeof v, f)) {} fclose(f); v[strcspn(v, "\\n")] = 0; fn += snprintf(fb + fn, sizeof fb - fn, " %s=%s", gn[g], v); } }
+                FLog("%s", fb);
+            }
+""" + s[e+1:]
+wr(p, s)
+print('OK  v4.5: diagnosa termal/CPU/GPU')
